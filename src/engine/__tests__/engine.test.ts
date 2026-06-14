@@ -114,19 +114,71 @@ describe("buildFfmpeg", () => {
     expect(filtergraph.indexOf("hqdn3d")).toBeLessThan(filtergraph.indexOf("crop"));
   });
 
-  it("delays star trails with a timeline enable when startFrame > 0", () => {
-    const { filtergraph } = buildFfmpeg(
+  it("delays star trails via split/trim/concat so trails accumulate from the start frame", () => {
+    const { filtergraph, args } = buildFfmpeg(
       canonicalProject({ post: { starTrail: { decay: 1, startFrame: 300 } } }),
     );
-    expect(filtergraph).toContain("lagfun=decay=1:enable=gte(n\\,300),crop=");
+    // pre-segment untouched, post-segment gets a FRESH lagfun, then concat
+    expect(filtergraph).toContain("split=2[a][b]");
+    expect(filtergraph).toContain("[a]trim=end_frame=300,setpts=PTS-STARTPTS[pre]");
+    expect(filtergraph).toContain("[b]trim=start_frame=300,setpts=PTS-STARTPTS,lagfun=decay=1[post]");
+    expect(filtergraph).toContain("[pre][post]concat=n=2:v=1,crop=7752:4360:");
+    expect(filtergraph).not.toContain("enable="); // no broken timeline gate
+    expect(args).toContain("-filter_complex");
+    expect(args).toContain("[outv]");
   });
 
-  it("omits the enable clause when trails start at frame 0", () => {
-    const { filtergraph } = buildFfmpeg(
+  it("uses a simple -vf chain (lagfun on whole stream) when trails start at frame 0", () => {
+    const { filtergraph, args } = buildFfmpeg(
       canonicalProject({ post: { starTrail: { decay: 1, startFrame: 0 } } }),
     );
     expect(filtergraph).toContain("lagfun=decay=1,crop=");
-    expect(filtergraph).not.toContain("enable=");
+    expect(filtergraph).not.toContain("concat");
+    expect(args).toContain("-vf");
+  });
+
+  it("retracts trails (reverse-lagfun-reverse) when an end frame is set", () => {
+    const { filtergraph, args, outputFrames } = buildFfmpeg(
+      canonicalProject({
+        post: { starTrail: { decay: 1, startFrame: 100, endFrame: 400 } },
+      }),
+    );
+    // A (untouched) | B (grow) | C (retract) | D (normal tail) -> 4-way split+concat
+    expect(filtergraph).toContain("split=4");
+    expect(filtergraph).toContain("concat=n=4:v=1");
+    // grow segment: lagfun before crop, over [100,401)
+    expect(filtergraph).toContain("[B0]trim=start_frame=100:end_frame=401");
+    expect(filtergraph).toContain("lagfun=decay=1");
+    // retract segment: downscale, reverse, lagfun, reverse, then a moving crop
+    expect(filtergraph).toContain("reverse,lagfun=decay=1,reverse,crop=3840:2160:");
+    expect(filtergraph).toContain("[D0]trim=start_frame=401");
+    expect(args).toContain("-filter_complex");
+    // C adds (end-start+1)=301 frames to the clip
+    expect(outputFrames).toBe(787 + 301);
+  });
+
+  it("comet (decay<1) wind-down dissolves via blend, not reverse-erosion", () => {
+    const { filtergraph, args, outputFrames } = buildFfmpeg(
+      canonicalProject({
+        post: { starTrail: { decay: 0.95, startFrame: 100, endFrame: 400 } },
+      }),
+    );
+    // crossfade comet stream into plain — no reverse (which would flip the comet)
+    expect(filtergraph).toContain("blend=all_expr=");
+    expect(filtergraph).not.toContain("reverse");
+    expect(filtergraph).toContain("lagfun=decay=0.95");
+    expect(args).toContain("-filter_complex");
+    expect(outputFrames).toBe(787); // no added frames
+  });
+
+  it("omits the A segment when the trail retracts but starts at frame 0", () => {
+    const { filtergraph } = buildFfmpeg(
+      canonicalProject({
+        post: { starTrail: { decay: 1, startFrame: 0, endFrame: 400 } },
+      }),
+    );
+    expect(filtergraph).toContain("split=3"); // B, C, D only
+    expect(filtergraph).not.toContain("[A0]");
   });
 
   it("clamps star-trail decay to 0..1", () => {

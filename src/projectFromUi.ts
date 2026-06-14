@@ -32,6 +32,8 @@ export interface UiSettings {
   starTrail?: StarTrailSettings;
   /** When trails begin, as a fraction of the timeline (0 = from start). */
   trailStartFrac?: number;
+  /** When trails stop growing & retract, as a fraction (1 = run to the end). */
+  trailEndFrac?: number;
 }
 
 function evenFloor(v: number): number {
@@ -81,6 +83,9 @@ export function projectFromUi(s: UiSettings): TimelapseProject {
               ...s.starTrail,
               startFrame: Math.round(
                 Math.min(1, Math.max(0, s.trailStartFrac ?? 0)) * lastFrame,
+              ),
+              endFrame: Math.round(
+                Math.min(1, Math.max(0, s.trailEndFrac ?? 1)) * lastFrame,
               ),
             },
           }

@@ -1,6 +1,6 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Timelapse Studio",
+  "productName": "RailTrack",
   "version": "0.1.0",
   "identifier": "com.tauri.dev",
   "build": {
@@ -12,11 +12,11 @@
   "app": {
     "windows": [
       {
-        "title": "Timelapse Studio",
-        "width": 820,
-        "height": 940,
-        "minWidth": 560,
-        "minHeight": 600,
+        "title": "RailTrack",
+        "width": 1024,
+        "height": 530,
+        "minWidth": 900,
+        "minHeight": 480,
         "resizable": true,
         "fullscreen": false
       }

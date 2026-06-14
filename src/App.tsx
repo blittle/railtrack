@@ -149,6 +149,7 @@ export default function App() {
   const [starTrailOn, setStarTrailOn] = useState(false);
   const [trailDecay, setTrailDecay] = useState(1.0);
   const [trailStartFrac, setTrailStartFrac] = useState(0); // when trails begin
+  const [trailEndFrac, setTrailEndFrac] = useState(1); // when trails retract (1 = end)
 
   // run state
   const [progress, setProgress] = useState<Progress | null>(null);
@@ -328,6 +329,7 @@ export default function App() {
         : undefined,
       starTrail: starTrailOn ? { decay: trailDecay } : undefined,
       trailStartFrac: starTrailOn ? trailStartFrac : undefined,
+      trailEndFrac: starTrailOn ? trailEndFrac : undefined,
     });
   }
 
@@ -470,7 +472,7 @@ export default function App() {
   return (
     <div className="app">
       <div className="header">
-        <h1>Timelapse Studio</h1>
+        <h1>RailTrack</h1>
         <button onClick={() => setShowSettings(true)} title="Settings">⚙ Settings</button>
       </div>
 
@@ -480,185 +482,198 @@ export default function App() {
         </div>
       )}
 
-      <div className="sections">
-      <Section title="1 · Source frames" open={openSection === "source"} onToggle={() => toggle("source")}>
-        <div className="row">
-          <button onClick={chooseSource}>Choose folder…</button>
-          <span className="grow mono">{sourceDir || "no folder selected"}</span>
-        </div>
-        {frameCount > 0 && (
-          <p className="muted">
-            {frameCount} frames · {srcW}×{srcH} · {glob}
-            {" · "}
-            preview cache: {proxyReady ? "ready ✓" : proxyCount > 0 ? `${proxyCount}/${frameCount}` : "not built"}
-          </p>
-        )}
-      </Section>
+      <div className="main">
+        <div className="sections">
+          <Section title="1 · Source frames" open={openSection === "source"} onToggle={() => toggle("source")}>
+            <div className="row">
+              <button onClick={chooseSource}>Choose folder…</button>
+              <span className="grow mono">{sourceDir || "no folder selected"}</span>
+            </div>
+            {frameCount > 0 && (
+              <p className="muted">
+                {frameCount} frames · {srcW}×{srcH} · {glob}
+                {" · "}
+                preview cache: {proxyReady ? "ready ✓" : proxyCount > 0 ? `${proxyCount}/${frameCount}` : "not built"}
+              </p>
+            )}
+          </Section>
 
-      <Section title="2 · Window &amp; pan" open={openSection === "window"} onToggle={() => toggle("window")}>
-        <div className="field">
-          <label>Pan — {pan}px {panReverse ? "(right → left)" : "(left → right)"}</label>
-          <input type="range" min={0} max={Math.max(400, srcW ? srcW - outW : 800)}
-                 value={pan} onChange={(e) => setPan(+e.target.value)} />
-        </div>
-        <label className="check">
-          <input type="checkbox" checked={panReverse}
-                 onChange={(e) => setPanReverse(e.target.checked)} />
-          Reverse direction
-        </label>
-        <div className="field">
-          <label>
-            Vertical position — {Math.round(yFrac * 100)}%
-            {keyframes[0] ? ` (y = ${keyframes[0].y}px)` : ""}
-            <span className="hint"> · 0% top, 100% bottom</span>
-          </label>
-          <input type="range" min={0} max={1} step={0.005} value={yFrac}
-                 onChange={(e) => setYFrac(+e.target.value)} />
-        </div>
-      </Section>
-
-      <Section title="3 · Star trails (lighten stack)" open={openSection === "trails"} onToggle={() => toggle("trails")}>
-        <label className="check">
-          <input type="checkbox" checked={starTrailOn}
-                 onChange={(e) => setStarTrailOn(e.target.checked)} />
-          Enable star trails
-        </label>
-        {starTrailOn && (
-          <>
+          <Section title="2 · Window &amp; pan" open={openSection === "window"} onToggle={() => toggle("window")}>
+            <div className="field">
+              <label>Pan — {pan}px {panReverse ? "(right → left)" : "(left → right)"}</label>
+              <input type="range" min={0} max={Math.max(400, srcW ? srcW - outW : 800)}
+                value={pan} onChange={(e) => setPan(+e.target.value)} />
+            </div>
+            <label className="check">
+              <input type="checkbox" checked={panReverse}
+                onChange={(e) => setPanReverse(e.target.checked)} />
+              Reverse direction
+            </label>
             <div className="field">
               <label>
-                Persistence — {trailDecay.toFixed(3)}
-                <span className="hint"> · {trailDecay >= 1 ? "permanent trails" : "fading (comet style)"}</span>
+                Vertical position — {Math.round(yFrac * 100)}%
+                {keyframes[0] ? ` (y = ${keyframes[0].y}px)` : ""}
+                <span className="hint"> · 0% top, 100% bottom</span>
               </label>
-              <input type="range" min={0.9} max={1} step={0.002} value={trailDecay}
-                     onChange={(e) => setTrailDecay(+e.target.value)} />
+              <input type="range" min={0} max={1} step={0.005} value={yFrac}
+                onChange={(e) => setYFrac(+e.target.value)} />
             </div>
-            <div className="field">
-              <label>
-                Trails start at — {Math.round(trailStartFrac * 100)}%
-                {frameCount ? ` (frame ${Math.round(trailStartFrac * (frameCount - 1))})` : ""}
-              </label>
-              <input type="range" min={0} max={1} step={0.01} value={trailStartFrac}
-                     onChange={(e) => setTrailStartFrac(+e.target.value)} />
-            </div>
-            <p className="muted">
-              Trails start at 0% means from the beginning; higher values play a normal
-              timelapse first, then trails suddenly begin forming. Stacking is applied
-              before the pan; denoise (if on) runs before stacking.
-            </p>
-          </>
-        )}
-      </Section>
+          </Section>
 
-      <Section title="4 · Post-processing" open={openSection === "post"} onToggle={() => toggle("post")}>
-        <label className="check">
-          <input type="checkbox" checked={denoiseOn}
-                 onChange={(e) => setDenoiseOn(e.target.checked)} />
-          Denoise
-        </label>
-        {denoiseOn && (
-          <div className="fieldGrid">
-            <div className="field">
-              <label>Filter</label>
-              <select value={denoiseFilterName}
-                      onChange={(e) => setDenoiseFilterName(e.target.value as DenoiseFilter)}>
-                <option value="hqdn3d">hqdn3d (fast)</option>
-                <option value="fftdnoiz">fftdnoiz (quality)</option>
-              </select>
-            </div>
-            <div className="field">
-              <label>Strength — {denoiseStrength.toFixed(2)}</label>
-              <input type="range" min={0} max={1} step={0.05} value={denoiseStrength}
-                     onChange={(e) => setDenoiseStrength(+e.target.value)} />
-            </div>
-          </div>
-        )}
-      </Section>
+          <Section title="3 · Star trails (lighten stack)" open={openSection === "trails"} onToggle={() => toggle("trails")}>
+            <label className="check">
+              <input type="checkbox" checked={starTrailOn}
+                onChange={(e) => setStarTrailOn(e.target.checked)} />
+              Enable star trails
+            </label>
+            {starTrailOn && (
+              <>
+                <div className="field">
+                  <label>
+                    Persistence — {trailDecay.toFixed(3)}
+                    <span className="hint"> · {trailDecay >= 1 ? "permanent trails" : "fading (comet style)"}</span>
+                  </label>
+                  <input type="range" min={0.9} max={1} step={0.002} value={trailDecay}
+                    onChange={(e) => setTrailDecay(+e.target.value)} />
+                </div>
+                <div className="field">
+                  <label>
+                    Trails start at — {Math.round(trailStartFrac * 100)}%
+                    {frameCount ? ` (frame ${Math.round(trailStartFrac * (frameCount - 1))})` : ""}
+                  </label>
+                  <input type="range" min={0} max={1} step={0.01} value={trailStartFrac}
+                    onChange={(e) => setTrailStartFrac(Math.min(+e.target.value, trailEndFrac))} />
+                </div>
+                <div className="field">
+                  <label>
+                    Trails end at — {trailEndFrac >= 1 ? "100% (run to end)" : `${Math.round(trailEndFrac * 100)}%`}
+                    {frameCount && trailEndFrac < 1 ? ` (frame ${Math.round(trailEndFrac * (frameCount - 1))})` : ""}
+                  </label>
+                  <input type="range" min={0} max={1} step={0.01} value={trailEndFrac}
+                    onChange={(e) => setTrailEndFrac(Math.max(+e.target.value, trailStartFrac))} />
+                </div>
+                <p className="muted">
+                  Start at 0% = trails from the beginning; higher plays a normal timelapse first,
+                  then trails form. End below 100% makes the trails retract back to points (the
+                  scene roughly holds during the retract, adding ~that many frames to the clip).
+                  Stacking is applied before the pan; denoise (if on) runs before stacking.
+                </p>
+              </>
+            )}
+          </Section>
 
-      <Section title="5 · Output &amp; render" open={openSection === "output"} onToggle={() => toggle("output")}>
-        <div className="fieldGrid">
-          <div className="field">
-            <label>Resolution</label>
-            <select value={resKey} onChange={(e) => setResKey(e.target.value)}>
-              {Object.keys(RES_PRESETS).map((k) => (
-                <option key={k}>{k}</option>
-              ))}
-            </select>
-          </div>
-          <div className="field">
-            <label>Frame rate (fps)</label>
-            <input type="number" min={1} max={120} value={fps}
-                   onChange={(e) => setFps(+e.target.value)} />
-          </div>
-          <div className="field">
-            <label>Codec</label>
-            <select value={codec} onChange={(e) => setCodec(e.target.value as Codec)}>
-              <option value="h264">H.264</option>
-              <option value="h265">H.265</option>
-              <option value="prores">ProRes</option>
-            </select>
-          </div>
-          {codec !== "prores" && (
-            <div className="field">
-              <label>Quality — CRF {crf} <span className="hint">(lower = better)</span></label>
-              <input type="range" min={12} max={30} value={crf}
-                     onChange={(e) => setCrf(+e.target.value)} />
+          <Section title="4 · Post-processing" open={openSection === "post"} onToggle={() => toggle("post")}>
+            <label className="check">
+              <input type="checkbox" checked={denoiseOn}
+                onChange={(e) => setDenoiseOn(e.target.checked)} />
+              Denoise
+            </label>
+            {denoiseOn && (
+              <div className="fieldGrid">
+                <div className="field">
+                  <label>Filter</label>
+                  <select value={denoiseFilterName}
+                    onChange={(e) => setDenoiseFilterName(e.target.value as DenoiseFilter)}>
+                    <option value="hqdn3d">hqdn3d (fast)</option>
+                    <option value="fftdnoiz">fftdnoiz (quality)</option>
+                  </select>
+                </div>
+                <div className="field">
+                  <label>Strength — {denoiseStrength.toFixed(2)}</label>
+                  <input type="range" min={0} max={1} step={0.05} value={denoiseStrength}
+                    onChange={(e) => setDenoiseStrength(+e.target.value)} />
+                </div>
+              </div>
+            )}
+          </Section>
+
+          <Section title="5 · Output &amp; render" open={openSection === "output"} onToggle={() => toggle("output")}>
+            <div className="fieldGrid">
+              <div className="field">
+                <label>Resolution</label>
+                <select value={resKey} onChange={(e) => setResKey(e.target.value)}>
+                  {Object.keys(RES_PRESETS).map((k) => (
+                    <option key={k}>{k}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="field">
+                <label>Frame rate (fps)</label>
+                <input type="number" min={1} max={120} value={fps}
+                  onChange={(e) => setFps(+e.target.value)} />
+              </div>
+              <div className="field">
+                <label>Codec</label>
+                <select value={codec} onChange={(e) => setCodec(e.target.value as Codec)}>
+                  <option value="h264">H.264</option>
+                  <option value="h265">H.265</option>
+                  <option value="prores">ProRes</option>
+                </select>
+              </div>
+              {codec !== "prores" && (
+                <div className="field">
+                  <label>Quality — CRF {crf} <span className="hint">(lower = better)</span></label>
+                  <input type="range" min={12} max={30} value={crf}
+                    onChange={(e) => setCrf(+e.target.value)} />
+                </div>
+              )}
             </div>
-          )}
-        </div>
 
-        <div className="field">
-          <label>Destination file</label>
-          <div className="row">
-            <button onClick={chooseOutput}>Choose…</button>
-            <span className="grow mono">{outputPath || "no file selected"}</span>
-          </div>
-        </div>
+            <div className="field">
+              <label>Destination file</label>
+              <div className="row">
+                <button onClick={chooseOutput}>Choose…</button>
+                <span className="grow mono">{outputPath || "no file selected"}</span>
+              </div>
+            </div>
 
-        <div className="actions">
-          {!running ? (
-            <>
-              <button className="primary" onClick={render}>Render</button>
-              <button onClick={previewRender} title="Low-res preview of the whole timelapse. First run builds a one-time cache; later previews are fast.">
-                ⚡ Preview render
+            <div className="actions">
+              {!running ? (
+                <>
+                  <button className="primary" onClick={render}>Render</button>
+                  <button onClick={previewRender} title="Low-res preview of the whole timelapse. First run builds a one-time cache; later previews are fast.">
+                    ⚡ Preview render
+                  </button>
+                </>
+              ) : (
+                <button className="danger" onClick={cancel}>Cancel</button>
+              )}
+              <button onClick={showCommand} title="Show the ffmpeg command this will run">
+                ⌗ View command
               </button>
-            </>
-          ) : (
-            <button className="danger" onClick={cancel}>Cancel</button>
-          )}
-          <button onClick={showCommand} title="Show the ffmpeg command this will run">
-            ⌗ View command
-          </button>
-          <span className="grow status">{status}</span>
+              <span className="grow status">{status}</span>
+            </div>
+
+            {running && (
+              <div className="progress">
+                <div className="bar" style={{ width: `${pct}%` }} />
+                <span className="pct">
+                  {pct}% · frame {progress?.frame ?? 0}/{frameCount}
+                  {progress?.speed ? ` · ${progress.speed}` : ""}
+                  {eta != null ? ` · ${fmtTime(eta)} left` : ""}
+                </span>
+              </div>
+            )}
+            {error && <pre className="error">{error}</pre>}
+          </Section>
         </div>
 
-        {running && (
-          <div className="progress">
-            <div className="bar" style={{ width: `${pct}%` }} />
-            <span className="pct">
-              {pct}% · frame {progress?.frame ?? 0}/{frameCount}
-              {progress?.speed ? ` · ${progress.speed}` : ""}
-              {eta != null ? ` · ${fmtTime(eta)} left` : ""}
-            </span>
-          </div>
-        )}
-        {error && <pre className="error">{error}</pre>}
-      </Section>
+        <div>
+          <section className="panel preview-pane">
+            <h2>Preview</h2>
+            <Preview
+              ffmpegPath={ffmpegPath}
+              ready={ffmpegOk}
+              sourceDir={proxyReady ? proxyDir : sourceDir}
+              frameCount={frameCount}
+              srcW={srcW}
+              srcH={srcH}
+              keyframes={keyframes}
+              outAspect={outW / outH}
+            />
+          </section>
+        </div>
       </div>
-
-      <section className="panel preview-pane">
-        <h2>Preview</h2>
-        <Preview
-          ffmpegPath={ffmpegPath}
-          ready={ffmpegOk}
-          sourceDir={proxyReady ? proxyDir : sourceDir}
-          frameCount={frameCount}
-          srcW={srcW}
-          srcH={srcH}
-          keyframes={keyframes}
-          outAspect={outW / outH}
-        />
-      </section>
 
       {showSettings && (
         <div className="modalOverlay" onClick={() => setShowSettings(false)}>
@@ -676,9 +691,9 @@ export default function App() {
               </label>
               <div className="row">
                 <input className="grow" placeholder="path to ffmpeg"
-                       value={ffmpegPath}
-                       onChange={(e) => setFfmpegPath(e.target.value)}
-                       onBlur={async () => setFfmpegOk(await validateFfmpeg(ffmpegPath))} />
+                  value={ffmpegPath}
+                  onChange={(e) => setFfmpegPath(e.target.value)}
+                  onBlur={async () => setFfmpegOk(await validateFfmpeg(ffmpegPath))} />
                 <button onClick={chooseFfmpeg}>Browse…</button>
               </div>
             </div>
@@ -686,8 +701,8 @@ export default function App() {
               <label>ffprobe path</label>
               <div className="row">
                 <input className="grow" placeholder="path to ffprobe"
-                       value={ffprobePath}
-                       onChange={(e) => setFfprobePath(e.target.value)} />
+                  value={ffprobePath}
+                  onChange={(e) => setFfprobePath(e.target.value)} />
                 <button onClick={chooseFfprobe}>Browse…</button>
               </div>
             </div>
@@ -717,8 +732,8 @@ export default function App() {
               <label>Cache location</label>
               <div className="row">
                 <input className="grow" placeholder="system temp directory (default)"
-                       value={proxyBaseDir}
-                       onChange={(e) => setProxyBaseDir(e.target.value)} />
+                  value={proxyBaseDir}
+                  onChange={(e) => setProxyBaseDir(e.target.value)} />
                 <button onClick={chooseProxyDir}>Browse…</button>
                 {proxyBaseDir && <button onClick={() => { setProxyBaseDir(""); setTimeout(refreshProxyStatus, 0); }}>Default</button>}
               </div>
@@ -739,7 +754,7 @@ export default function App() {
             </div>
             <label className="check">
               <input type="checkbox" checked={rebuildEachSession}
-                     onChange={(e) => setRebuildEachSession(e.target.checked)} />
+                onChange={(e) => setRebuildEachSession(e.target.checked)} />
               Rebuild cache each session (clears all caches on startup)
             </label>
             <p className="muted">

@@ -56,6 +56,11 @@ export interface StarTrailSettings {
    * start (default).
    */
   startFrame?: number;
+  /**
+   * Frame index at which trails stop growing and begin retracting (FIFO erosion)
+   * back to points. Omitted / last frame = trails run to the end of the clip.
+   */
+  endFrame?: number;
 }
 
 export interface PostSettings {

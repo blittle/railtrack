@@ -66,15 +66,22 @@ function escapeExpr(expr: string): string {
 }
 
 /**
- * Build a piecewise expression in the crop variable `n` (frame index) for one
- * window property (x or y) across the keyframe segments. Holds the endpoints
+ * Build a piecewise expression for one window property (x or y) across the
+ * keyframe segments, evaluated against `frameVar` (an ffmpeg expression giving
+ * the effective source-frame index — usually "n", but a shifted/held expression
+ * when segments are reordered for star-trail wind-down). Holds the endpoints
  * outside the keyframed range. Easing belongs to each segment's destination kf.
  */
-function buildExpr(keyframes: Keyframe[], pick: (k: Keyframe) => number): string {
+function buildExpr(
+  keyframes: Keyframe[],
+  pick: (k: Keyframe) => number,
+  frameVar = "n",
+): string {
   const k = [...keyframes].sort((a, b) => a.frame - b.frame);
   const last = k[k.length - 1];
+  const V = frameVar;
 
-  // default (n >= last frame): hold the last value
+  // default (frame >= last frame): hold the last value
   let expr = num(pick(last));
 
   for (let i = k.length - 2; i >= 0; i--) {
@@ -88,7 +95,7 @@ function buildExpr(keyframes: Keyframe[], pick: (k: Keyframe) => number): string
     if (span === 0 || va === vb) {
       seg = num(vb);
     } else {
-      const u = `(n-${num(a.frame)})/${num(span)}`; // normalized progress 0..1
+      const u = `(${V}-${num(a.frame)})/${num(span)}`; // normalized progress 0..1
       let t: string;
       if (b.easing === "easeInOut") {
         // smoothstep: u*u*(3-2*u)
@@ -99,13 +106,13 @@ function buildExpr(keyframes: Keyframe[], pick: (k: Keyframe) => number): string
       seg = `${num(va)}+(${num(vb - va)})*${t}`;
     }
 
-    // apply this segment when n < b.frame (earlier guards handle n < a.frame)
-    expr = `if(lt(n,${num(b.frame)}),${seg},${expr})`;
+    // apply this segment when frame < b.frame (earlier guards handle frame < a.frame)
+    expr = `if(lt(${V},${num(b.frame)}),${seg},${expr})`;
   }
 
   // before the first keyframe: hold the first value
   const first = k[0];
-  expr = `if(lt(n,${num(first.frame)}),${num(pick(first))},${expr})`;
+  expr = `if(lt(${V},${num(first.frame)}),${num(pick(first))},${expr})`;
   return expr;
 }
 
@@ -157,10 +164,6 @@ export function buildFfmpeg(p: TimelapseProject, opts: BuildOptions = {}): Built
   // window size is constant across keyframes (pan/move only)
   const cw = evenFloor(p.keyframes[0].w);
   const ch = evenFloor(p.keyframes[0].h);
-  // Commas inside an expression must be escaped, otherwise ffmpeg's filtergraph
-  // parser reads them as filter-chain separators (e.g. "if(lt(n,0),0,..." breaks).
-  const xExpr = escapeExpr(buildExpr(p.keyframes, (k) => k.x));
-  const yExpr = escapeExpr(buildExpr(p.keyframes, (k) => k.y));
 
   // Output resolution: full for a real render, low-res for a preview.
   const ow = preview ? evenFloor(preview.width) : evenFloor(p.output.w);
@@ -168,33 +171,34 @@ export function buildFfmpeg(p: TimelapseProject, opts: BuildOptions = {}): Built
     ? evenFloor((ow * p.output.h) / p.output.w)
     : evenFloor(p.output.h);
 
+  // crop filter whose pan is evaluated against an effective-frame expression
+  // (usually "n"; a shifted/held one for reordered star-trail segments).
+  // Commas inside the expressions are escaped so the filtergraph parser keeps
+  // them inside the crop options instead of reading them as filter separators.
+  const cropFor = (fv: string) =>
+    `crop=${cw}:${ch}:` +
+    `${escapeExpr(buildExpr(p.keyframes, (k) => k.x, fv))}:` +
+    `${escapeExpr(buildExpr(p.keyframes, (k) => k.y, fv))}`;
+
   const trail = p.post.starTrail;
-  const parts: string[] = [];
+  const scaleFilter = `scale=${ow}:${oh}:flags=${preview ? "lanczos" : p.output.scaleFlags}`;
+  // Denoise runs before stacking when trailing (so noise isn't baked into trails);
+  // otherwise after scaling (cheaper). Preview skips denoise for speed.
+  const denoise = preview || !p.post.denoise ? null : denoiseFilter(p.post.denoise);
+  const decayNum = trail ? Math.min(1, Math.max(0, trail.decay)) : 1;
+  const decay = num(decayNum);
 
-  // Pre-crop, full-frame stage. With star trails we must accumulate (lagfun)
-  // BEFORE cropping so trails form in fixed sensor space and the pan windows
-  // into the result. Denoise also goes here when trailing, so noise isn't
-  // baked into the trails as permanent speckle. (Preview skips denoise for speed.)
-  if (!preview && trail && p.post.denoise) parts.push(denoiseFilter(p.post.denoise));
-  if (trail) {
-    const decay = Math.min(1, Math.max(0, trail.decay));
-    let lagfun = `lagfun=decay=${num(decay)}`;
-    // Optional delay: trails only start accumulating at `startFrame`. Before
-    // that the filter is disabled (frames pass through), so it plays as a normal
-    // timelapse, then trails suddenly begin forming. (comma escaped for parser)
-    const start = Math.max(0, Math.floor(trail.startFrame ?? 0));
-    if (start > 0) lagfun += `:enable=gte(n\\,${start})`;
-    parts.push(lagfun);
-  }
+  const N = p.source.frameCount;
+  const clampN = (v: number) => Math.max(0, Math.min(N - 1, Math.floor(v)));
+  // Trail accumulates over [start, end]. lagfun keeps an internal running max
+  // even when timeline-disabled, so `enable=` can't gate it — instead we split
+  // the stream and run lagfun only on the relevant segment(s) and concat.
+  const start = trail ? clampN(trail.startFrame ?? 0) : 0;
+  const end = trail ? Math.max(start, clampN(trail.endFrame ?? N - 1)) : N - 1;
+  const delayedStart = !!trail && start > 0;
+  const windDown = !!trail && end < N - 1; // frames remain after the trail -> retract
 
-  parts.push(`crop=${cw}:${ch}:${xExpr}:${yExpr}`);
-  parts.push(`scale=${ow}:${oh}:flags=${preview ? "lanczos" : p.output.scaleFlags}`);
-
-  // Without star trails, denoise the smaller scaled output (cheaper). Preview skips it.
-  if (!preview && !trail && p.post.denoise) parts.push(denoiseFilter(p.post.denoise));
-
-  const outputFrames = p.source.frameCount;
-  const filtergraph = parts.join(",");
+  let outputFrames = N;
   const inputPattern = `${p.source.dir.replace(/\/$/, "")}/${p.source.glob}`;
 
   const codecArgs = preview
@@ -202,12 +206,110 @@ export function buildFfmpeg(p: TimelapseProject, opts: BuildOptions = {}): Built
        "-r", String(p.output.fps)]
     : videoCodecArgs(p.output);
 
+  let graphArgs: string[];
+  let filtergraph: string;
+
+  if (trail && windDown && decayNum < 1) {
+    // COMET wind-down: a fading comet has a direction, and the reverse-erosion
+    // trick flips that direction (visible swap). Instead, crossfade the comet
+    // stream into the plain timelapse over a short window after `end`, so trails
+    // dissolve away while the scene keeps playing live. No added frames; both
+    // streams share crop("n") so they stay aligned and the pan tracks normally.
+    const head = denoise ? `${denoise},` : "";
+    const fadeLen = Math.min(N - 1 - end, Math.max(1, Math.round(p.output.fps * 1.5)));
+    const cropScale = `${cropFor("n")},${scaleFilter}`;
+    const alpha = escapeExpr(`clip((N-${end})/${fadeLen},0,1)`);
+    const trailChain =
+      start > 0
+        ? `[ti]split=2[a][b];` +
+          `[a]trim=end_frame=${start},setpts=PTS-STARTPTS[pre];` +
+          `[b]trim=start_frame=${start},setpts=PTS-STARTPTS,lagfun=decay=${decay}[post];` +
+          `[pre][post]concat=n=2:v=1,${cropScale}[t]`
+        : `[ti]lagfun=decay=${decay},${cropScale}[t]`;
+    filtergraph =
+      `[0:v]${head}split=2[ti][pi];` +
+      `${trailChain};` +
+      `[pi]${cropScale}[p];` +
+      `[t][p]blend=all_expr=A*(1-(${alpha}))+B*(${alpha})[outv]`;
+    graphArgs = ["-filter_complex", filtergraph, "-map", "[outv]", "-r", String(p.output.fps)];
+  } else if (trail && windDown) {
+    // Segments: A untouched [0,start) | B grow [start,end] | C retract | D normal
+    // [end+1,N). C is reverse(lagfun(reverse([start,end]))) — a FIFO erosion that
+    // retracts the trail back to points. C adds (end-start+1) frames, so the clip
+    // is that much longer (the scene roughly holds while the trail retracts).
+    const L = end - start;
+    outputFrames = N + (L + 1);
+    // Pan is parameterized by OUTPUT time (mapped back to a source frame) so it
+    // keeps gliding continuously across every segment — including the retract —
+    // instead of stalling. Each segment supplies its output-frame offset.
+    const K = (N - 1) / (outputFrames - 1);
+    const fv = (offset: number) => `(${num(K)}*(n+${offset}))`;
+    const cs = (offset: number) => `${cropFor(fv(offset))},${scaleFilter}`;
+    const head = denoise ? `${denoise},` : "";
+
+    // Retract C: do the (reverse) max on a downscaled FIXED full frame so the
+    // window can move afterwards without smearing trails — and so `reverse`'s
+    // frame buffer is bounded by output size, not the 42MP source.
+    const sf = ow / cw; // source-window px -> output px
+    const w2 = evenFloor(p.source.width * sf) + 2;
+    const h2 = evenFloor((p.source.height * w2) / p.source.width);
+    const cOff = start + L + 1; // C's first output frame
+    const cx = escapeExpr(
+      `min(max((${buildExpr(p.keyframes, (k) => k.x, fv(cOff))})*${num(sf)},0),${w2 - ow})`,
+    );
+    const cy = escapeExpr(
+      `min(max((${buildExpr(p.keyframes, (k) => k.y, fv(cOff))})*${num(sf)},0),${h2 - oh})`,
+    );
+
+    const segs: string[] = [];
+    if (start > 0) segs.push("A");
+    segs.push("B", "C");
+    if (end < N - 1) segs.push("D");
+
+    const splitPads = segs.map((s) => `[${s}0]`).join("");
+    const chains = [`[0:v]${head}split=${segs.length}${splitPads}`];
+    if (segs.includes("A"))
+      chains.push(`[A0]trim=end_frame=${start},setpts=PTS-STARTPTS,${cs(0)}[A]`);
+    chains.push(
+      `[B0]trim=start_frame=${start}:end_frame=${end + 1},setpts=PTS-STARTPTS,` +
+        `lagfun=decay=${decay},${cs(start)}[B]`,
+    );
+    chains.push(
+      `[C0]trim=start_frame=${start}:end_frame=${end + 1},setpts=PTS-STARTPTS,` +
+        `scale=${w2}:${h2},reverse,lagfun=decay=${decay},reverse,crop=${ow}:${oh}:${cx}:${cy}[C]`,
+    );
+    if (segs.includes("D"))
+      chains.push(`[D0]trim=start_frame=${end + 1},setpts=PTS-STARTPTS,${cs(start + 2 * L + 2)}[D]`);
+    chains.push(`${segs.map((s) => `[${s}]`).join("")}concat=n=${segs.length}:v=1[outv]`);
+
+    filtergraph = chains.join(";");
+    graphArgs = ["-filter_complex", filtergraph, "-map", "[outv]", "-r", String(p.output.fps)];
+  } else if (trail && delayedStart) {
+    // delayed start, trail runs to the end of the clip (no retract)
+    const head = denoise ? `${denoise},` : "";
+    filtergraph =
+      `[0:v]${head}split=2[a][b];` +
+      `[a]trim=end_frame=${start},setpts=PTS-STARTPTS[pre];` +
+      `[b]trim=start_frame=${start},setpts=PTS-STARTPTS,lagfun=decay=${decay}[post];` +
+      `[pre][post]concat=n=2:v=1,${cropFor("n")},${scaleFilter}[outv]`;
+    graphArgs = ["-filter_complex", filtergraph, "-map", "[outv]", "-r", String(p.output.fps)];
+  } else {
+    const parts: string[] = [];
+    if (denoise && trail) parts.push(denoise); // before lagfun
+    if (trail) parts.push(`lagfun=decay=${decay}`);
+    parts.push(cropFor("n"));
+    parts.push(scaleFilter);
+    if (denoise && !trail) parts.push(denoise); // after scale (cheaper)
+    filtergraph = parts.join(",");
+    graphArgs = ["-vf", filtergraph];
+  }
+
   const args = [
     "-y",
     "-framerate", String(p.output.fps),
     "-pattern_type", "glob",
     "-i", inputPattern,
-    "-vf", filtergraph,
+    ...graphArgs,
     ...codecArgs,
     "-movflags", "+faststart",
     p.output.path,

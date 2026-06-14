@@ -12,34 +12,41 @@ body {
 }
 
 .app {
-  max-width: 760px;
+  max-width: 1280px;
   margin: 0 auto;
   padding: 16px 20px;
-  padding-bottom: 0;
   display: flex;
   flex-direction: column;
   height: 100vh;
 }
 
-/* scrollable list of accordion sections */
-.sections {
+/* two columns: controls (left rail) + always-visible preview (right) */
+.main {
+  display: flex;
   flex: 1 1 auto;
-  overflow-y: auto;
   min-height: 0;
-  padding-right: 2px;
+  gap: 18px;
 }
 
-/* preview is pinned below the scrollable sections, always visible, and
-   visually separated as its own fixed pane (edge-to-edge bar with a shadow) */
+/* scrollable list of accordion sections (left rail) */
+.sections {
+  flex: 0 0 500px;
+  overflow-y: auto;
+  min-height: 0;
+  padding-right: 4px;
+}
+
+/* preview occupies the right column, always visible */
 .preview-pane {
-  flex: none;
-  margin: 14px -20px 0;
-  border: none;
-  border-top: 2px solid #3a5a82;
-  border-radius: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+  align-self: stretch;
+  overflow: auto;
+  margin: 0;
+  border: 1px solid #2a2d35;
+  border-left: 2px solid #3a5a82;
+  border-radius: 10px;
   background: #181b22;
-  box-shadow: 0 -12px 24px rgba(0, 0, 0, 0.45);
-  padding: 14px 20px 16px;
 }
 .preview-pane h2 { color: #8fb3e6; }
 
@@ -106,7 +113,6 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em;
 .panel {
   background: #1d1f25;
   border: 1px solid #2a2d35;
-  border-radius: 10px;
   padding: 14px 16px;
 }
 

@@ -188,6 +188,23 @@ export function buildFfmpeg(p: TimelapseProject, opts: BuildOptions = {}): Built
   const decayNum = trail ? Math.min(1, Math.max(0, trail.decay)) : 1;
   const decay = num(decayNum);
 
+  // Sub-pixel pan: ffmpeg's crop is integer-only, so a slow pan jumps a whole
+  // pixel every few frames (stutter). Supersampling horizontally (upscale ->
+  // integer-crop in the finer space -> downscale) makes each step a fraction of
+  // a pixel. Cheap on small preview proxies; off (ss=1) for the full render,
+  // where the frame is ~42MP and the downscale already softens the steps.
+  const ss = preview ? 4 : 1;
+  const windowCropScale = (fv: string): string => {
+    if (ss <= 1) return `${cropFor(fv)},${scaleFilter}`;
+    const xe = escapeExpr(`(${buildExpr(p.keyframes, (k) => k.x, fv)})*${ss}`);
+    const ye = escapeExpr(buildExpr(p.keyframes, (k) => k.y, fv));
+    return (
+      `scale=iw*${ss}:ih:flags=bilinear,` +
+      `crop=${cw * ss}:${ch}:${xe}:${ye},` +
+      `${scaleFilter}`
+    );
+  };
+
   const N = p.source.frameCount;
   const clampN = (v: number) => Math.max(0, Math.min(N - 1, Math.floor(v)));
   // Trail accumulates over [start, end]. lagfun keeps an internal running max
@@ -217,7 +234,7 @@ export function buildFfmpeg(p: TimelapseProject, opts: BuildOptions = {}): Built
     // streams share crop("n") so they stay aligned and the pan tracks normally.
     const head = denoise ? `${denoise},` : "";
     const fadeLen = Math.min(N - 1 - end, Math.max(1, Math.round(p.output.fps * 1.5)));
-    const cropScale = `${cropFor("n")},${scaleFilter}`;
+    const cropScale = windowCropScale("n");
     const alpha = escapeExpr(`clip((N-${end})/${fadeLen},0,1)`);
     const trailChain =
       start > 0
@@ -244,7 +261,7 @@ export function buildFfmpeg(p: TimelapseProject, opts: BuildOptions = {}): Built
     // instead of stalling. Each segment supplies its output-frame offset.
     const K = (N - 1) / (outputFrames - 1);
     const fv = (offset: number) => `(${num(K)}*(n+${offset}))`;
-    const cs = (offset: number) => `${cropFor(fv(offset))},${scaleFilter}`;
+    const cs = (offset: number) => windowCropScale(fv(offset));
     const head = denoise ? `${denoise},` : "";
 
     // Retract C: do the (reverse) max on a downscaled FIXED full frame so the
@@ -291,14 +308,13 @@ export function buildFfmpeg(p: TimelapseProject, opts: BuildOptions = {}): Built
       `[0:v]${head}split=2[a][b];` +
       `[a]trim=end_frame=${start},setpts=PTS-STARTPTS[pre];` +
       `[b]trim=start_frame=${start},setpts=PTS-STARTPTS,lagfun=decay=${decay}[post];` +
-      `[pre][post]concat=n=2:v=1,${cropFor("n")},${scaleFilter}[outv]`;
+      `[pre][post]concat=n=2:v=1,${windowCropScale("n")}[outv]`;
     graphArgs = ["-filter_complex", filtergraph, "-map", "[outv]", "-r", String(p.output.fps)];
   } else {
     const parts: string[] = [];
     if (denoise && trail) parts.push(denoise); // before lagfun
     if (trail) parts.push(`lagfun=decay=${decay}`);
-    parts.push(cropFor("n"));
-    parts.push(scaleFilter);
+    parts.push(windowCropScale("n"));
     if (denoise && !trail) parts.push(denoise); // after scale (cheaper)
     filtergraph = parts.join(",");
     graphArgs = ["-vf", filtergraph];

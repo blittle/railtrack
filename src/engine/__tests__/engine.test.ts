@@ -205,7 +205,10 @@ describe("buildFfmpeg", () => {
     );
     // 1920 wide at 16:9 -> 1080 tall, sharper lanczos scaling
     expect(filtergraph).toContain("scale=1920:1080:flags=lanczos");
-    expect(filtergraph).toContain("lagfun=decay=1,crop=7752:4360:"); // trails before crop
+    expect(filtergraph).toContain("lagfun=decay=1"); // trails before crop
+    // preview supersamples horizontally (x4) for a smooth sub-pixel pan
+    expect(filtergraph).toContain("scale=iw*4:ih:flags=bilinear");
+    expect(filtergraph).toContain("crop=31008:4360:"); // 7752 * 4
     expect(filtergraph).not.toContain("select="); // no decimation — plays full rate
     expect(args).toContain("veryfast");
     expect(args).toContain("20"); // crf

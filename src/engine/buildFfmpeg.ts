@@ -47,6 +47,12 @@ export interface BuildOptions {
    * subset), NOT by decimating here — so the clip plays at full frame rate.
    */
   preview?: PreviewOptions;
+  /**
+   * Horizontal supersample factor for sub-pixel (smooth) panning on the full
+   * render. 1 = off (default). Higher = smoother slow pans, but much slower to
+   * render (it upscales each full-res frame). Previews always supersample.
+   */
+  panSupersample?: number;
 }
 
 /** Format a number for an ffmpeg expression: integers stay clean, no exp notation. */
@@ -193,7 +199,7 @@ export function buildFfmpeg(p: TimelapseProject, opts: BuildOptions = {}): Built
   // integer-crop in the finer space -> downscale) makes each step a fraction of
   // a pixel. Cheap on small preview proxies; off (ss=1) for the full render,
   // where the frame is ~42MP and the downscale already softens the steps.
-  const ss = preview ? 4 : 1;
+  const ss = preview ? 4 : Math.max(1, Math.floor(opts.panSupersample ?? 1));
   const windowCropScale = (fv: string): string => {
     if (ss <= 1) return `${cropFor(fv)},${scaleFilter}`;
     const xe = escapeExpr(`(${buildExpr(p.keyframes, (k) => k.x, fv)})*${ss}`);

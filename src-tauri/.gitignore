@@ -2,3 +2,6 @@
 # will have compiled files and executables
 /target/
 /gen/schemas
+
+# Bundled ffmpeg sidecars are fetched at release time (CI), not committed
+/binaries/

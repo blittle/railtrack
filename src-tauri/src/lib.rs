@@ -57,8 +57,28 @@ fn tool_works(path: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Find an ffmpeg/ffprobe-like tool: try PATH, then common install locations.
+/// A bundled sidecar binary sits next to the app executable (Tauri externalBin).
+/// In dev/BYO builds it isn't there, so this returns None and we fall back.
+fn bundled_tool(name: &str) -> Option<String> {
+    let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    let mut path = dir.join(name);
+    if cfg!(windows) {
+        path.set_extension("exe");
+    }
+    let s = path.to_string_lossy().to_string();
+    if tool_works(&s) {
+        Some(s)
+    } else {
+        None
+    }
+}
+
+/// Find an ffmpeg/ffprobe-like tool: prefer a bundled sidecar, then PATH, then
+/// common install locations.
 fn detect_tool(name: &str) -> Option<String> {
+    if let Some(b) = bundled_tool(name) {
+        return Some(b);
+    }
     let mut candidates = vec![name.to_string()];
     for dir in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"] {
         candidates.push(format!("{dir}/{name}"));

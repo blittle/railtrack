@@ -1,0 +1,86 @@
+# Build installers for every platform and attach them to a GitHub Release.
+#
+# Trigger: push a tag like `v0.1.0`.
+#
+# macOS and Windows builds BUNDLE a static ffmpeg/ffprobe (so end users need
+# nothing installed). Linux is build-your-own — RailTrack auto-detects ffmpeg on
+# PATH. ffmpeg is fetched into src-tauri/binaries/ named with the Rust target
+# triple (Tauri's externalBin convention) and bundled via tauri.bundle.conf.json.
+#
+# These are UNSIGNED builds — see the README for how users open them (right-click
+# Open / "Open Anyway" on macOS, "More info -> Run anyway" on Windows). To add
+# Apple Developer ID signing + notarization later, set the APPLE_* repo secrets
+# and pass them through the tauri-action `env:` block.
+
+name: release
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14,       target: aarch64-apple-darwin,     ff: macos-arm64, bundleFfmpeg: true }
+          - { os: macos-13,       target: x86_64-apple-darwin,      ff: macos-amd64, bundleFfmpeg: true }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc,   ff: win-x64,     bundleFfmpeg: true }
+          - { os: ubuntu-22.04,   target: x86_64-unknown-linux-gnu, ff: "",          bundleFfmpeg: false }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: "${{ matrix.target }}" }
+
+      - name: Linux build deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Fetch bundled ffmpeg + ffprobe (macOS / Windows)
+        if: matrix.bundleFfmpeg
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p src-tauri/binaries
+          T="${{ matrix.target }}"
+          ff="src-tauri/binaries/ffmpeg-$T"
+          fp="src-tauri/binaries/ffprobe-$T"
+          case "${{ matrix.ff }}" in
+            macos-arm64|macos-amd64)
+              arch=${{ matrix.ff == 'macos-arm64' && 'arm64' || 'amd64' }}
+              base="https://ffmpeg.martin-riedl.de/redirect/latest/macos/$arch/release"
+              curl -fsSL "$base/ffmpeg.zip"  -o ffmpeg.zip  && unzip -oq ffmpeg.zip  && cp ffmpeg  "$ff"
+              curl -fsSL "$base/ffprobe.zip" -o ffprobe.zip && unzip -oq ffprobe.zip && cp ffprobe "$fp"
+              chmod +x "$ff" "$fp"
+              ;;
+            win-x64)
+              curl -fsSL https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip -o ff.zip
+              unzip -oq ff.zip
+              d=$(find . -maxdepth 1 -type d -name 'ffmpeg-*-win64-gpl' | head -1)
+              cp "$d/bin/ffmpeg.exe"  "$ff.exe"
+              cp "$d/bin/ffprobe.exe" "$fp.exe"
+              ;;
+          esac
+
+      - run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: >-
+            --target ${{ matrix.target }}
+            ${{ matrix.bundleFfmpeg && '--config src-tauri/tauri.bundle.conf.json' || '' }}
+          tagName: ${{ github.ref_name }}
+          releaseName: "RailTrack ${{ github.ref_name }}"
+          releaseDraft: true
+          prerelease: false

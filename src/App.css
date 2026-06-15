@@ -18,6 +18,7 @@ body {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  overflow: hidden; /* sections scroll internally; never scroll the whole page */
 }
 
 /* two columns: controls (left rail) + always-visible preview (right) */
@@ -41,14 +42,39 @@ body {
   flex: 1 1 auto;
   min-width: 0;
   align-self: stretch;
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   margin: 0;
   border: 1px solid #2a2d35;
   border-left: 2px solid #3a5a82;
-  border-radius: 10px;
   background: #181b22;
 }
-.preview-pane h2 { color: #8fb3e6; }
+.preview-pane h2 { color: #8fb3e6; flex: none; }
+
+/* fill the pane; the canvas area flexes and centers, scrubber sits below */
+.previewRoot { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.previewArea {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* canvas has an intrinsic (output-aspect) size; max-width/height scale it to
+   fit the area preserving aspect, for both landscape and portrait. The
+   viewport-based max-height caps a tall portrait preview so it never forces
+   the pane to scroll (percentage max-height is unreliable through flex). */
+.previewCanvas {
+  max-width: 100%;
+  max-height: calc(100vh - 220px);
+  width: auto;
+  height: auto;
+  background: #000;
+  border: 1px solid #343843;
+  border-radius: 6px;
+}
 
 h1 { font-size: 22px; margin: 0; }
 h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em;
@@ -287,15 +313,6 @@ button.danger { background: #b3402f; border-color: #b3402f; }
   margin: 8px 0 12px;
 }
 
-.previewWrap {
-  position: relative;
-  width: 100%;
-  background: #000;
-  border: 1px solid #343843;
-  border-radius: 6px;
-  overflow: hidden;
-}
-.previewWrap canvas { display: block; width: 100%; height: 100%; }
 .previewHint {
   position: absolute;
   inset: 0;

@@ -111,7 +111,9 @@ export default function App() {
 
   function showCommand() {
     try {
-      const { args } = buildFfmpeg(currentProject(outputPath || "output.mp4"));
+      const { args } = buildFfmpeg(currentProject(outputPath || "output.mp4"), {
+        panSupersample: panSmooth,
+      });
       setCmdText([ffmpegPath || "ffmpeg", ...args].map(shellQuote).join(" "));
     } catch (e) {
       setCmdText(`# Could not build command:\n${String(e)}`);
@@ -132,6 +134,7 @@ export default function App() {
 
   // output
   const [resKey, setResKey] = useState("4K (3840×2160)");
+  const [vertical, setVertical] = useState(false);
   const [fps, setFps] = useState(30);
   const [codec, setCodec] = useState<Codec>("h264");
   const [crf, setCrf] = useState(18);
@@ -146,6 +149,7 @@ export default function App() {
   const [denoiseOn, setDenoiseOn] = useState(false);
   const [denoiseFilterName, setDenoiseFilterName] = useState<DenoiseFilter>("hqdn3d");
   const [denoiseStrength, setDenoiseStrength] = useState(0.5);
+  const [panSmooth, setPanSmooth] = useState(1); // export sub-pixel pan factor (1=off)
   const [starTrailOn, setStarTrailOn] = useState(false);
   const [trailDecay, setTrailDecay] = useState(1.0);
   const [trailStartFrac, setTrailStartFrac] = useState(0); // when trails begin
@@ -157,7 +161,10 @@ export default function App() {
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
 
-  const [outW, outH] = RES_PRESETS[resKey];
+  const [presetW, presetH] = RES_PRESETS[resKey];
+  // Vertical/portrait output just swaps width & height.
+  const outW = vertical ? presetH : presetW;
+  const outH = vertical ? presetW : presetH;
   const proxyReady = frameCount > 0 && proxyCount >= frameCount;
 
   // Keyframes derived from the current pan/window settings — drives the preview.
@@ -394,7 +401,7 @@ export default function App() {
 
     let args: string[];
     try {
-      args = buildFfmpeg(currentProject(outputPath)).args;
+      args = buildFfmpeg(currentProject(outputPath), { panSupersample: panSmooth }).args;
     } catch (e) {
       return setError(String(e));
     }
@@ -585,6 +592,17 @@ export default function App() {
                 </div>
               </div>
             )}
+            <div className="field" style={{ marginTop: 10 }}>
+              <label>
+                Smooth pan on export
+                <span className="hint"> · supersamples to remove pan stutter (slower render)</span>
+              </label>
+              <select value={panSmooth} onChange={(e) => setPanSmooth(+e.target.value)}>
+                <option value={1}>Off</option>
+                <option value={2}>2× (smoother)</option>
+                <option value={4}>4× (smoothest, slowest)</option>
+              </select>
+            </div>
           </Section>
 
           <Section title="5 · Output &amp; render" open={openSection === "output"} onToggle={() => toggle("output")}>
@@ -602,6 +620,13 @@ export default function App() {
                 <input type="number" min={1} max={120} value={fps}
                   onChange={(e) => setFps(+e.target.value)} />
               </div>
+            </div>
+            <label className="check">
+              <input type="checkbox" checked={vertical}
+                onChange={(e) => setVertical(e.target.checked)} />
+              Vertical / portrait ({outW}×{outH})
+            </label>
+            <div className="fieldGrid">
               <div className="field">
                 <label>Codec</label>
                 <select value={codec} onChange={(e) => setCodec(e.target.value as Codec)}>
@@ -658,7 +683,7 @@ export default function App() {
           </Section>
         </div>
 
-        <div>
+        <div style={{width: '100%'}}>
           <section className="panel preview-pane">
             <h2>Preview</h2>
             <Preview
@@ -667,7 +692,6 @@ export default function App() {
               sourceDir={proxyReady ? proxyDir : sourceDir}
               frameCount={frameCount}
               srcW={srcW}
-              srcH={srcH}
               keyframes={keyframes}
               outAspect={outW / outH}
             />

@@ -1,7 +1,9 @@
 {
-  "name": "timelapse-studio",
+  "name": "railtrack",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "4K timelapses with a windowed pan and star trails",
+  "license": "GPL-3.0-or-later",
   "type": "module",
   "scripts": {
     "dev": "vite",

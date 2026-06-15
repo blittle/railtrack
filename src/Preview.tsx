@@ -11,7 +11,6 @@ interface Props {
   sourceDir: string;
   frameCount: number;
   srcW: number;
-  srcH: number;
   keyframes: Keyframe[];
   outAspect: number;
 }
@@ -23,32 +22,23 @@ interface Props {
  * demand (debounced) and cached by index.
  */
 export default function Preview({
-  ffmpegPath, ready, sourceDir, frameCount, srcW, srcH, keyframes, outAspect,
+  ffmpegPath, ready, sourceDir, frameCount, srcW, keyframes, outAspect,
 }: Props) {
   const [t, setT] = useState(0); // 0..1 timeline position
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
-  const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const cache = useRef(new Map<number, HTMLImageElement>());
   const reqId = useRef(0);
 
   const index = Math.round(t * Math.max(0, frameCount - 1));
 
-  // Measure the container so the canvas buffer matches its on-screen size.
-  const [boxW, setBoxW] = useState(0);
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    setBoxW(el.clientWidth);
-    const ro = new ResizeObserver((entries) => setBoxW(entries[0].contentRect.width));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  const dpr = window.devicePixelRatio || 1;
-  const bufW = Math.max(1, Math.round(boxW * dpr));
-  const bufH = Math.max(1, Math.round((boxW / outAspect) * dpr));
+  // Fixed-resolution canvas buffer at the OUTPUT aspect; CSS (max-width/height
+  // + width/height auto) scales it to fit the pane while preserving aspect, for
+  // both landscape and portrait — no fragile container measuring needed.
+  const BUF = 1600;
+  const bufW = outAspect >= 1 ? BUF : Math.max(1, Math.round(BUF * outAspect));
+  const bufH = outAspect >= 1 ? Math.max(1, Math.round(BUF / outAspect)) : BUF;
 
   // The currently-loaded proxy image (kept in state so draws re-run).
   const [img, setImg] = useState<HTMLImageElement | null>(null);
@@ -115,9 +105,9 @@ export default function Preview({
   const disabled = !ready || frameCount === 0;
 
   return (
-    <div>
-      <div className="previewWrap" ref={wrapRef} style={{ aspectRatio: String(outAspect) }}>
-        <canvas ref={canvasRef} width={bufW} height={bufH} />
+    <div className="previewRoot">
+      <div className="previewArea">
+        <canvas className="previewCanvas" ref={canvasRef} width={bufW} height={bufH} />
         {disabled && <div className="previewHint">load a source folder to preview</div>}
         {loading && !disabled && <div className="previewHint">rendering frame…</div>}
       </div>

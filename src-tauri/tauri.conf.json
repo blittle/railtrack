@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "RailTrack",
   "version": "0.1.0",
-  "identifier": "com.tauri.dev",
+  "identifier": "com.bretlittle.railtrack",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
@@ -28,6 +28,11 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "category": "Video",
+    "copyright": "Copyright © 2026 Bret Little",
+    "shortDescription": "4K timelapses with a windowed pan and star trails",
+    "longDescription": "RailTrack turns a folder of large still photos into a 4K (or vertical) timelapse, windowing a crop into each frame for a smooth pan, with optional star-trail stacking, denoise, and fast low-res previews.",
+    "licenseFile": "../LICENSE",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

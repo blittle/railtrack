@@ -42,11 +42,17 @@ function evenFloor(v: number): number {
 }
 
 export function projectFromUi(s: UiSettings): TimelapseProject {
-  // Widest window matching the output aspect ratio that still leaves `pan` px
-  // of horizontal travel, clamped to the source height.
-  const cropW = evenFloor(s.srcW - s.pan);
-  let cropH = evenFloor((cropW * s.outH) / s.outW);
-  if (cropH > s.srcH) cropH = evenFloor(s.srcH);
+  // Largest window matching the output aspect ratio that fits the source while
+  // leaving `pan` px of horizontal travel. Start from a full-height window
+  // (best for portrait/vertical output); if it's too wide to fit with the pan
+  // room, fall back to a full-width window (the landscape case).
+  const outAsp = s.outW / s.outH;
+  let cropH = evenFloor(s.srcH);
+  let cropW = evenFloor(cropH * outAsp);
+  if (cropW + s.pan > s.srcW) {
+    cropW = evenFloor(s.srcW - s.pan);
+    cropH = evenFloor(cropW / outAsp);
+  }
 
   const yMax = s.srcH - cropH;
   const y = Math.round(Math.min(1, Math.max(0, s.yFrac)) * yMax);

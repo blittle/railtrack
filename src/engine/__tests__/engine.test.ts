@@ -215,6 +215,17 @@ describe("buildFfmpeg", () => {
     expect(outputFrames).toBe(787); // every frame
   });
 
+  it("panSupersample enables sub-pixel pan on the full render", () => {
+    const off = buildFfmpeg(canonicalProject());
+    expect(off.filtergraph).not.toContain("scale=iw*"); // default: integer crop
+    expect(off.filtergraph.startsWith("crop=7752:4360:")).toBe(true);
+
+    const on = buildFfmpeg(canonicalProject(), { panSupersample: 4 });
+    expect(on.filtergraph).toContain("scale=iw*4:ih:flags=bilinear");
+    expect(on.filtergraph).toContain("crop=31008:4360:"); // 7752 * 4
+    expect(on.filtergraph).toContain("scale=3840:2160:flags=lanczos"); // back to 4K
+  });
+
   it("preview drops denoise for speed", () => {
     const { filtergraph } = buildFfmpeg(
       canonicalProject({ post: { denoise: { filter: "hqdn3d", strength: 0.5 } } }),

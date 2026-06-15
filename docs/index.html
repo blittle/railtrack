@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RailTrack — 4K timelapses with a windowed pan & star trails</title>
+  <meta name="description" content="RailTrack turns a folder of large photos into a 4K or vertical timelapse, with a smooth windowed pan, star-trail stacking, denoise, and fast previews." />
+  <link rel="icon" type="image/png" href="./logo.png" />
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: #15161a;
+      color: #e7e7ea;
+      line-height: 1.55;
+    }
+    a { color: #6ea2ff; }
+    .wrap { max-width: 880px; margin: 0 auto; padding: 0 20px; }
+
+    header { text-align: center; padding: 64px 20px 36px; }
+    header img { width: 96px; height: 96px; border-radius: 22px; box-shadow: 0 12px 40px rgba(0,0,0,.5); }
+    h1 { font-size: 40px; margin: 18px 0 6px; letter-spacing: -0.5px; }
+    .tagline { font-size: 18px; color: #aeb4bf; margin: 0 auto; max-width: 620px; }
+
+    .cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin: 26px 0 4px; }
+    .btn {
+      display: inline-block; text-decoration: none; font-weight: 600; font-size: 15px;
+      padding: 11px 20px; border-radius: 9px; border: 1px solid #3a3f4b; color: #e7e7ea; background: #2a2e38;
+    }
+    .btn:hover { background: #333845; }
+    .btn.primary { background: #3b6fe0; border-color: #3b6fe0; }
+    .btn.primary:hover { background: #4f80f0; }
+    .sub { color: #9aa0aa; font-size: 13px; margin-top: 10px; }
+
+    figure { margin: 40px 0; }
+    figure img { width: 100%; border-radius: 12px; border: 1px solid #2a2d35; display: block; }
+    figcaption { color: #9aa0aa; font-size: 13px; text-align: center; margin-top: 10px; }
+
+    h2 { font-size: 24px; margin: 48px 0 16px; }
+    .features { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 0; list-style: none; }
+    .features li { background: #1d1f25; border: 1px solid #2a2d35; border-radius: 10px; padding: 16px 18px; }
+    .features b { color: #8fb3e6; }
+
+    .downloads { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .dl { background: #1d1f25; border: 1px solid #2a2d35; border-radius: 10px; padding: 18px; }
+    .dl h3 { margin: 0 0 4px; font-size: 16px; }
+    .dl p { margin: 0 0 12px; color: #9aa0aa; font-size: 13px; }
+
+    .note { background: #1d1f25; border: 1px solid #2a2d35; border-left: 3px solid #3a5a82;
+            border-radius: 8px; padding: 14px 16px; font-size: 14px; color: #c7ccd4; margin: 20px 0; }
+    code { font-family: ui-monospace, monospace; background: #0f1014; padding: 2px 6px; border-radius: 5px; font-size: 13px; }
+
+    footer { text-align: center; color: #9aa0aa; font-size: 13px; padding: 50px 20px 60px; border-top: 1px solid #2a2d35; margin-top: 56px; }
+
+    @media (max-width: 640px) {
+      .features, .downloads { grid-template-columns: 1fr; }
+      h1 { font-size: 32px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <img src="./logo.png" alt="RailTrack logo" />
+    <h1>RailTrack</h1>
+    <p class="tagline">Turn a folder of large photos into a smooth 4K (or vertical) timelapse — with a windowed pan, star trails, denoise, and fast previews.</p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/blittle/railtrack/releases/latest">Download</a>
+      <a class="btn" href="https://github.com/blittle/railtrack">View on GitHub</a>
+    </div>
+    <p class="sub">Free &amp; open source · macOS · Windows · Linux</p>
+  </header>
+
+  <main class="wrap">
+    <figure>
+      <img src="./screenshot.jpg" alt="RailTrack app screenshot" />
+      <figcaption>Controls on the left, a live preview of the windowed pan on the right.</figcaption>
+    </figure>
+
+    <h2>What it does</h2>
+    <ul class="features">
+      <li><b>Windowed pan</b> — crop a 4K window out of much larger frames and glide it across the scene, sub-pixel smooth.</li>
+      <li><b>Star trails</b> — lighten-stack the stars, with adjustable persistence and a configurable start &amp; end (trails grow, then retract or dissolve back to normal).</li>
+      <li><b>Vertical / portrait</b> — one checkbox flips the output (and the preview) to 9:16 for social.</li>
+      <li><b>Denoise</b> — clean up high-ISO night shots before stacking.</li>
+      <li><b>Fast previews</b> — a one-time proxy cache renders whole-timelapse previews in seconds.</li>
+      <li><b>Flexible output</b> — H.264 / H.265 / ProRes at your chosen resolution, fps, and quality.</li>
+    </ul>
+
+    <h2>Download</h2>
+    <div class="downloads">
+      <div class="dl">
+        <h3>macOS — Apple Silicon</h3>
+        <p>The <code>aarch64.dmg</code> · ffmpeg included</p>
+        <a class="btn primary" href="https://github.com/blittle/railtrack/releases/latest">Get the .dmg</a>
+      </div>
+      <div class="dl">
+        <h3>macOS — Intel</h3>
+        <p>The <code>x64.dmg</code> · ffmpeg included</p>
+        <a class="btn primary" href="https://github.com/blittle/railtrack/releases/latest">Get the .dmg</a>
+      </div>
+      <div class="dl">
+        <h3>Windows</h3>
+        <p>The <code>.exe</code> / <code>.msi</code> · ffmpeg included</p>
+        <a class="btn primary" href="https://github.com/blittle/railtrack/releases/latest">Get the installer</a>
+      </div>
+      <div class="dl">
+        <h3>Linux</h3>
+        <p>AppImage / .deb · install <code>ffmpeg</code> separately</p>
+        <a class="btn primary" href="https://github.com/blittle/railtrack/releases/latest">Get the build</a>
+      </div>
+    </div>
+
+    <div class="note">
+      <strong>Opening the app:</strong> the builds aren't code-signed yet, so the first launch needs an extra step.
+      <br>macOS: right-click the app → <strong>Open</strong>, or <strong>System Settings → Privacy &amp; Security → Open Anyway</strong>
+      (<a href="https://support.apple.com/guide/mac-help/mh40616">Apple's guide</a>).
+      <br>Windows: on the SmartScreen prompt, click <strong>More info → Run anyway</strong>.
+    </div>
+  </main>
+
+  <footer>
+    <p>RailTrack is free software under the <a href="https://github.com/blittle/railtrack/blob/main/LICENSE">GPL-3.0</a> license. Released builds include an ffmpeg build (also GPL).</p>
+    <p><a href="https://github.com/blittle/railtrack">github.com/blittle/railtrack</a></p>
+  </footer>
+</body>
+</html>

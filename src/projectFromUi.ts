@@ -34,6 +34,9 @@ export interface UiSettings {
   trailStartFrac?: number;
   /** When trails stop growing & retract, as a fraction (1 = run to the end). */
   trailEndFrac?: number;
+  /** Fade from/to black, in seconds (0 = none). */
+  fadeInSec?: number;
+  fadeOutSec?: number;
 }
 
 function evenFloor(v: number): number {
@@ -95,6 +98,9 @@ export function projectFromUi(s: UiSettings): TimelapseProject {
               ),
             },
           }
+        : {}),
+      ...((s.fadeInSec ?? 0) > 0 || (s.fadeOutSec ?? 0) > 0
+        ? { fade: { inSec: s.fadeInSec ?? 0, outSec: s.fadeOutSec ?? 0 } }
         : {}),
     },
   };

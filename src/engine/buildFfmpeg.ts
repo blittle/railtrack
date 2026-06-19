@@ -229,6 +229,19 @@ export function buildFfmpeg(p: TimelapseProject, opts: BuildOptions = {}): Built
        "-r", String(p.output.fps)]
     : videoCodecArgs(p.output);
 
+  // Fade in/out to black — applied as the very last filter on the output.
+  const fade = p.post.fade;
+  const fadeInF = fade ? Math.max(0, Math.round(fade.inSec * p.output.fps)) : 0;
+  const fadeOutF = fade ? Math.max(0, Math.round(fade.outSec * p.output.fps)) : 0;
+  const fadeSuffix = (frames: number): string => {
+    const fs: string[] = [];
+    if (fadeInF > 0) fs.push(`fade=t=in:s=0:n=${fadeInF}`);
+    if (fadeOutF > 0 && frames > fadeOutF) {
+      fs.push(`fade=t=out:s=${frames - fadeOutF}:n=${fadeOutF}`);
+    }
+    return fs.length ? `,${fs.join(",")}` : "";
+  };
+
   let graphArgs: string[];
   let filtergraph: string;
 
@@ -324,6 +337,16 @@ export function buildFfmpeg(p: TimelapseProject, opts: BuildOptions = {}): Built
     if (denoise && !trail) parts.push(denoise); // after scale (cheaper)
     filtergraph = parts.join(",");
     graphArgs = ["-vf", filtergraph];
+  }
+
+  // Append fade to the final output (before the [outv] label for complex graphs).
+  const fadeTail = fadeSuffix(outputFrames);
+  if (fadeTail) {
+    filtergraph =
+      graphArgs[0] === "-filter_complex"
+        ? filtergraph.replace(/\[outv\]$/, `${fadeTail}[outv]`)
+        : filtergraph + fadeTail;
+    graphArgs[1] = filtergraph;
   }
 
   const args = [

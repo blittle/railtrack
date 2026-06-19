@@ -150,6 +150,8 @@ export default function App() {
   const [denoiseFilterName, setDenoiseFilterName] = useState<DenoiseFilter>("hqdn3d");
   const [denoiseStrength, setDenoiseStrength] = useState(0.5);
   const [panSmooth, setPanSmooth] = useState(1); // export sub-pixel pan factor (1=off)
+  const [fadeInSec, setFadeInSec] = useState(0);
+  const [fadeOutSec, setFadeOutSec] = useState(0);
   const [starTrailOn, setStarTrailOn] = useState(false);
   const [trailDecay, setTrailDecay] = useState(1.0);
   const [trailStartFrac, setTrailStartFrac] = useState(0); // when trails begin
@@ -337,6 +339,8 @@ export default function App() {
       starTrail: starTrailOn ? { decay: trailDecay } : undefined,
       trailStartFrac: starTrailOn ? trailStartFrac : undefined,
       trailEndFrac: starTrailOn ? trailEndFrac : undefined,
+      fadeInSec,
+      fadeOutSec,
     });
   }
 
@@ -592,6 +596,18 @@ export default function App() {
                 </div>
               </div>
             )}
+            <div className="fieldGrid" style={{ marginTop: 10 }}>
+              <div className="field">
+                <label>Fade in from black (s)</label>
+                <input type="number" min={0} max={30} step={0.5} value={fadeInSec}
+                  onChange={(e) => setFadeInSec(Math.max(0, +e.target.value))} />
+              </div>
+              <div className="field">
+                <label>Fade out to black (s)</label>
+                <input type="number" min={0} max={30} step={0.5} value={fadeOutSec}
+                  onChange={(e) => setFadeOutSec(Math.max(0, +e.target.value))} />
+              </div>
+            </div>
             <div className="field" style={{ marginTop: 10 }}>
               <label>
                 Smooth pan on export

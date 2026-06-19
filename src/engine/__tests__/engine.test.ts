@@ -67,6 +67,28 @@ describe("buildFfmpeg", () => {
     ]);
   });
 
+  it("appends fade in/out as the last filters (simple -vf path)", () => {
+    const { filtergraph } = buildFfmpeg(
+      canonicalProject({ post: { fade: { inSec: 1, outSec: 2 } } }),
+    );
+    // fps 30 -> 30 frames in; out over 60 frames ending at frame 787
+    expect(filtergraph.endsWith("fade=t=in:s=0:n=30,fade=t=out:s=727:n=60")).toBe(true);
+  });
+
+  it("injects fade before [outv] in a filter_complex graph (star-trail retract)", () => {
+    const { filtergraph } = buildFfmpeg(
+      canonicalProject({
+        post: {
+          starTrail: { decay: 1, startFrame: 100, endFrame: 400 },
+          fade: { inSec: 0, outSec: 1 },
+        },
+      }),
+    );
+    // 1088 output frames -> fade out starts at 1058, before the [outv] label
+    expect(filtergraph).toContain("fade=t=out:s=1058:n=30[outv]");
+    expect(filtergraph.endsWith("[outv]")).toBe(true);
+  });
+
   it("appends denoise when configured", () => {
     const { filtergraph } = buildFfmpeg(
       canonicalProject({ post: { denoise: { filter: "hqdn3d", strength: 0.5 } } }),

@@ -63,9 +63,17 @@ export interface StarTrailSettings {
   endFrame?: number;
 }
 
+export interface FadeSettings {
+  /** Fade in from black over this many seconds (0 = none). */
+  inSec: number;
+  /** Fade out to black over this many seconds at the end (0 = none). */
+  outSec: number;
+}
+
 export interface PostSettings {
   denoise?: DenoiseSettings;
   starTrail?: StarTrailSettings;
+  fade?: FadeSettings;
 }
 
 export interface SourceInfo {

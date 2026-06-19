@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "4K timelapses with a windowed pan and star trails"
 authors = ["Bret Little"]
 license = "GPL-3.0-or-later"
-repository = "https://github.com/bretlittle/railtrack"
+repository = "https://github.com/blittle/railtrack"
 edition = "2021"
 rust-version = "1.77.2"
 

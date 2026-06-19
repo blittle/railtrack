@@ -3,6 +3,7 @@ import type { TimelapseProject } from "../project";
 import {
   buildFfmpeg,
   buildProxyCommand,
+  brightnessToGamma,
   denoiseFilter,
   ZoomNotSupportedError,
 } from "../buildFfmpeg";
@@ -65,6 +66,60 @@ describe("buildFfmpeg", () => {
       "-movflags", "+faststart",
       "timelapse_4k.mp4",
     ]);
+  });
+
+  it("appends color grade (eq gamma + colortemperature) before any fade", () => {
+    const { filtergraph } = buildFfmpeg(
+      canonicalProject({
+        post: {
+          color: { brightness: 0.1, contrast: 1.2, temperature: 4000 },
+          fade: { inSec: 0, outSec: 1 },
+        },
+      }),
+    );
+    expect(filtergraph).toContain("eq=gamma=1.1:contrast=1.2,colortemperature=temperature=4000");
+    // grade comes before the fade-out
+    expect(filtergraph.indexOf("colortemperature")).toBeLessThan(filtergraph.indexOf("fade=t=out"));
+  });
+
+  it("omits neutral grade components", () => {
+    const { filtergraph } = buildFfmpeg(
+      canonicalProject({ post: { color: { brightness: 0, contrast: 1, temperature: 5000 } } }),
+    );
+    expect(filtergraph).not.toContain("eq="); // gamma/contrast neutral
+    expect(filtergraph.endsWith("colortemperature=temperature=5000")).toBe(true);
+  });
+
+  it("maps brightness slider offsets to ffmpeg gamma", () => {
+    expect(brightnessToGamma(0)).toBe(1);
+    expect(brightnessToGamma(0.3)).toBe(1.3);
+    expect(brightnessToGamma(-0.3)).toBe(0.7);
+    expect(brightnessToGamma(1)).toBe(2);
+  });
+
+  it("appends expanded tone and color grade controls", () => {
+    const { filtergraph } = buildFfmpeg(
+      canonicalProject({
+        post: {
+          color: {
+            exposure: 0.12,
+            brightness: 0.2,
+            contrast: 1.3,
+            shadows: 20,
+            highlights: -30,
+            temperature: 5200,
+            tint: 25,
+            vibrance: 0.4,
+            saturation: 1.2,
+          },
+        },
+      }),
+    );
+    expect(filtergraph).toContain("eq=brightness=0.12:gamma=1.2:contrast=1.3:saturation=1.2");
+    expect(filtergraph).toContain("curves=all='0/0 0.25/0.29 0.75/0.69 1/1'");
+    expect(filtergraph).toContain("colortemperature=temperature=5200");
+    expect(filtergraph).toContain("colorbalance=rm=0.02:gm=-0.02:bm=0.02");
+    expect(filtergraph).toContain("vibrance=intensity=0.4");
   });
 
   it("appends fade in/out as the last filters (simple -vf path)", () => {

@@ -52,28 +52,88 @@ body {
 }
 .preview-pane h2 { color: #8fb3e6; flex: none; }
 
-/* fill the pane; the canvas area flexes and centers, scrubber sits below */
-.previewRoot { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
-.previewArea {
+/* the stage (full frame + crop boxes) flexes to fill; canvas scales to fit */
+.stageArea {
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
+  margin-bottom: 10px;
 }
-/* canvas has an intrinsic (output-aspect) size; max-width/height scale it to
-   fit the area preserving aspect, for both landscape and portrait. The
-   viewport-based max-height caps a tall portrait preview so it never forces
-   the pane to scroll (percentage max-height is unreliable through flex). */
-.previewCanvas {
+.stageCanvas {
   max-width: 100%;
-  max-height: calc(100vh - 220px);
+  max-height: calc(100vh - 240px);
   width: auto;
   height: auto;
   background: #000;
   border: 1px solid #343843;
   border-radius: 6px;
+  touch-action: none;
+}
+
+/* zoom bar between stage and timeline */
+.stageBar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.stageBar .zoomLabel {
+  font-size: 12px; color: #9aa0aa; text-transform: uppercase; letter-spacing: 0.05em;
+}
+.stageBar .muted { margin: 0; white-space: nowrap; }
+
+/* timeline */
+.timeline-wrap { flex: none; display: flex; align-items: center; gap: 10px; }
+.playBtn {
+  flex: none; width: 34px; height: 34px; border-radius: 8px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+.timeline-body { flex: 1 1 auto; min-width: 0; }
+.timeline {
+  position: relative;
+  height: 34px;
+  background: #14151a;
+  border: 1px solid #343843;
+  border-radius: 6px;
+  cursor: pointer;
+  touch-action: none;
+}
+.tl-fade { position: absolute; top: 0; bottom: 0; pointer-events: none; }
+.tl-fadeIn { left: 0; background: linear-gradient(90deg, #000, rgba(0, 0, 0, 0)); border-radius: 6px 0 0 6px; }
+.tl-fadeOut { right: 0; background: linear-gradient(270deg, #000, rgba(0, 0, 0, 0)); border-radius: 0 6px 6px 0; }
+.tl-trail {
+  position: absolute; top: 0; bottom: 0;
+  background: rgba(87, 200, 120, 0.16);
+  border-left: 2px solid #57c878; border-right: 2px solid #57c878;
+  pointer-events: none;
+}
+.tl-handle {
+  position: absolute; top: 0; bottom: 0; width: 12px; margin-left: -6px;
+  cursor: ew-resize; touch-action: none; z-index: 2;
+}
+.tl-handle::after {
+  content: ""; position: absolute; left: 5px; top: 4px; bottom: 4px; width: 2px; border-radius: 2px;
+}
+.tl-handle-fade::after { background: #e6c878; }
+.tl-handle-trail::after { background: #57c878; }
+.tl-handle:hover::after { left: 4px; width: 4px; }
+.tl-playhead {
+  position: absolute; top: -1px; bottom: -1px; width: 2px; margin-left: -1px;
+  background: #fff; pointer-events: none; box-shadow: 0 0 5px rgba(255, 255, 255, 0.7); z-index: 3;
+}
+.tl-labels {
+  display: flex; justify-content: space-between; font-size: 11px; margin: 3px 2px 0;
+  font-variant-numeric: tabular-nums;
+}
+.previewHint.stageLoading {
+  inset: auto 8px 8px auto;
+  width: auto; height: auto;
+  background: rgba(0, 0, 0, 0.6);
+  padding: 3px 9px; border-radius: 6px; font-size: 11px;
 }
 
 h1 { font-size: 22px; margin: 0; }

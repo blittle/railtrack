@@ -240,6 +240,7 @@ fn frame_proxy(
     dir: String,
     index: usize,
     max_w: u32,
+    grade_filter: Option<String>,
 ) -> Result<String, String> {
     let files = list_jpegs(&dir)?;
     if files.is_empty() {
@@ -247,12 +248,20 @@ fn frame_proxy(
     }
     let i = index.min(files.len() - 1);
 
+    let grade = grade_filter.unwrap_or_default();
+    let scale = format!("scale={max_w}:-1:flags=bilinear");
+    let vf = if grade.trim().is_empty() {
+        scale
+    } else {
+        format!("{grade},{scale}")
+    };
+
     let out = Command::new(&ffmpeg_path)
         .args(["-v", "error", "-y", "-i"])
         .arg(&files[i])
         .args([
             "-vf",
-            &format!("scale={max_w}:-1:flags=bilinear"),
+            &vf,
             "-frames:v",
             "1",
             "-f",

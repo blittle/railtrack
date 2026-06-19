@@ -37,7 +37,8 @@ export const framePreview = (
   dir: string,
   index: number,
   maxW: number,
-) => invoke<string>("frame_proxy", { ffmpegPath, dir, index, maxW });
+  gradeFilter?: string,
+) => invoke<string>("frame_proxy", { ffmpegPath, dir, index, maxW, gradeFilter });
 
 export const runFfmpeg = (
   ffmpegPath: string,

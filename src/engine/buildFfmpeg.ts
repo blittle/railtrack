@@ -7,6 +7,7 @@
  */
 
 import type {
+  ColorSettings,
   DenoiseSettings,
   Keyframe,
   OutputSettings,
@@ -136,6 +137,49 @@ export function denoiseFilter(d: DenoiseSettings): string {
   // fftdnoiz: strength 0.5 -> sigma 4 (matches our validated preset)
   const sigma = num(+(s * 8).toFixed(2));
   return `fftdnoiz=sigma=${sigma}`;
+}
+
+export function brightnessToGamma(brightness: number): number {
+  return Math.max(0.1, Math.min(10, 1 + brightness));
+}
+
+function toneCurveFilter(shadows: number, highlights: number): string | null {
+  if (shadows === 0 && highlights === 0) return null;
+  const shadowY = Math.max(0, Math.min(1, 0.25 + shadows * 0.002));
+  const highlightY = Math.max(0, Math.min(1, 0.75 + highlights * 0.002));
+  return `curves=all='0/0 0.25/${num(shadowY)} 0.75/${num(highlightY)} 1/1'`;
+}
+
+function tintFilter(tint: number): string | null {
+  if (tint === 0) return null;
+  const t = Math.max(-1, Math.min(1, tint / 100));
+  const rg = num(+(t * 0.08).toFixed(4));
+  const gg = num(+(-t * 0.08).toFixed(4));
+  const bg = num(+(t * 0.08).toFixed(4));
+  return `colorbalance=rm=${rg}:gm=${gg}:bm=${bg}`;
+}
+
+/** Color grade -> ffmpeg tone/color filter chain. */
+export function gradeFilter(c: ColorSettings): string {
+  const parts: string[] = [];
+  const eq: string[] = [];
+  const exposure = c.exposure ?? 0;
+  const saturation = c.saturation ?? 1;
+  if (exposure !== 0) eq.push(`brightness=${num(exposure)}`);
+  if (c.brightness !== 0) eq.push(`gamma=${num(brightnessToGamma(c.brightness))}`);
+  if (c.contrast !== 1) eq.push(`contrast=${num(c.contrast)}`);
+  if (saturation !== 1) eq.push(`saturation=${num(saturation)}`);
+  if (eq.length) parts.push(`eq=${eq.join(":")}`);
+  const toneCurve = toneCurveFilter(c.shadows ?? 0, c.highlights ?? 0);
+  if (toneCurve) parts.push(toneCurve);
+  if (c.temperature !== 6500) {
+    parts.push(`colortemperature=temperature=${num(Math.round(c.temperature))}`);
+  }
+  const tint = tintFilter(c.tint ?? 0);
+  if (tint) parts.push(tint);
+  const vibrance = c.vibrance ?? 0;
+  if (vibrance !== 0) parts.push(`vibrance=intensity=${num(vibrance)}`);
+  return parts.join(",");
 }
 
 function videoCodecArgs(o: OutputSettings): string[] {
@@ -339,13 +383,16 @@ export function buildFfmpeg(p: TimelapseProject, opts: BuildOptions = {}): Built
     graphArgs = ["-vf", filtergraph];
   }
 
-  // Append fade to the final output (before the [outv] label for complex graphs).
-  const fadeTail = fadeSuffix(outputFrames);
-  if (fadeTail) {
+  // Append the output tail (color grade, then fade) to the final output —
+  // before the [outv] label for complex graphs. Grade first so the fade dips
+  // the already-graded image to black, not the other way around.
+  const grade = p.post.color ? gradeFilter(p.post.color) : "";
+  const tail = (grade ? `,${grade}` : "") + fadeSuffix(outputFrames);
+  if (tail) {
     filtergraph =
       graphArgs[0] === "-filter_complex"
-        ? filtergraph.replace(/\[outv\]$/, `${fadeTail}[outv]`)
-        : filtergraph + fadeTail;
+        ? filtergraph.replace(/\[outv\]$/, `${tail}[outv]`)
+        : filtergraph + tail;
     graphArgs[1] = filtergraph;
   }
 

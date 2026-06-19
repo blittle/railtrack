@@ -1,12 +1,13 @@
 /**
- * Translate the simple Phase-2 UI controls into a full TimelapseProject.
- * This is the "easy mode" that builds a 2-keyframe horizontal pan, mirroring
- * make_timelapse.sh. The richer keyframe editor (Phase 4) will replace this
- * with arbitrary keyframes, but it produces the same project shape.
+ * Assemble a full TimelapseProject from the UI state. The crop windows come from
+ * the visual editor (the Stage) as ready-made keyframes; this just packages the
+ * source/output/post-processing settings around them.
  */
 import type {
   Codec,
+  ColorSettings,
   DenoiseSettings,
+  Keyframe,
   StarTrailSettings,
   TimelapseProject,
 } from "./engine/project";
@@ -25,9 +26,9 @@ export interface UiSettings {
   crf: number;
   outputPath: string;
 
-  pan: number; // horizontal pan, px
-  panReverse?: boolean; // pan right-to-left instead of left-to-right
-  yFrac: number; // vertical window position, 0 (top) .. 1 (bottom)
+  /** The two crop windows (start & end), in source pixels, from the editor. */
+  keyframes: Keyframe[];
+
   denoise?: DenoiseSettings;
   starTrail?: StarTrailSettings;
   /** When trails begin, as a fraction of the timeline (0 = from start). */
@@ -37,29 +38,25 @@ export interface UiSettings {
   /** Fade from/to black, in seconds (0 = none). */
   fadeInSec?: number;
   fadeOutSec?: number;
+  /** Color grade (tone + color controls). */
+  color?: ColorSettings;
 }
 
-function evenFloor(v: number): number {
-  const n = Math.floor(v);
-  return n - (n % 2);
+function neutralColor(c?: ColorSettings): boolean {
+  return !c || (
+    (c.exposure ?? 0) === 0 &&
+    c.brightness === 0 &&
+    c.contrast === 1 &&
+    (c.shadows ?? 0) === 0 &&
+    (c.highlights ?? 0) === 0 &&
+    c.temperature === 6500 &&
+    (c.tint ?? 0) === 0 &&
+    (c.vibrance ?? 0) === 0 &&
+    (c.saturation ?? 1) === 1
+  );
 }
 
 export function projectFromUi(s: UiSettings): TimelapseProject {
-  // Largest window matching the output aspect ratio that fits the source while
-  // leaving `pan` px of horizontal travel. Start from a full-height window
-  // (best for portrait/vertical output); if it's too wide to fit with the pan
-  // room, fall back to a full-width window (the landscape case).
-  const outAsp = s.outW / s.outH;
-  let cropH = evenFloor(s.srcH);
-  let cropW = evenFloor(cropH * outAsp);
-  if (cropW + s.pan > s.srcW) {
-    cropW = evenFloor(s.srcW - s.pan);
-    cropH = evenFloor(cropW / outAsp);
-  }
-
-  const yMax = s.srcH - cropH;
-  const y = Math.round(Math.min(1, Math.max(0, s.yFrac)) * yMax);
-
   const lastFrame = Math.max(1, s.frameCount - 1);
 
   return {
@@ -80,10 +77,7 @@ export function projectFromUi(s: UiSettings): TimelapseProject {
       crf: s.crf,
       scaleFlags: "lanczos",
     },
-    keyframes: [
-      { frame: 0, x: s.panReverse ? s.pan : 0, y, w: cropW, h: cropH, easing: "linear" },
-      { frame: lastFrame, x: s.panReverse ? 0 : s.pan, y, w: cropW, h: cropH, easing: "linear" },
-    ],
+    keyframes: s.keyframes,
     post: {
       ...(s.denoise ? { denoise: s.denoise } : {}),
       ...(s.starTrail
@@ -102,6 +96,7 @@ export function projectFromUi(s: UiSettings): TimelapseProject {
       ...((s.fadeInSec ?? 0) > 0 || (s.fadeOutSec ?? 0) > 0
         ? { fade: { inSec: s.fadeInSec ?? 0, outSec: s.fadeOutSec ?? 0 } }
         : {}),
+      ...(neutralColor(s.color) ? {} : { color: s.color }),
     },
   };
 }

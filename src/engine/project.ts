@@ -70,10 +70,32 @@ export interface FadeSettings {
   outSec: number;
 }
 
+export interface ColorSettings {
+  /** eq brightness/exposure offset, -1..1ish (0 = neutral). */
+  exposure?: number;
+  /** Slider offset mapped to ffmpeg eq gamma (0 = neutral). */
+  brightness: number;
+  /** eq contrast, 0..4ish (1 = neutral). */
+  contrast: number;
+  /** Shadows recovery/crush, -100..100 (0 = neutral). */
+  shadows?: number;
+  /** Highlights recovery/boost, -100..100 (0 = neutral). */
+  highlights?: number;
+  /** white balance in Kelvin (6500 = neutral; lower = warmer, higher = cooler). */
+  temperature: number;
+  /** Green/magenta tint, -100..100 (0 = neutral). */
+  tint?: number;
+  /** Selective saturation boost/cut, -1..1ish (0 = neutral). */
+  vibrance?: number;
+  /** eq saturation, 0..3ish (1 = neutral). */
+  saturation?: number;
+}
+
 export interface PostSettings {
   denoise?: DenoiseSettings;
   starTrail?: StarTrailSettings;
   fade?: FadeSettings;
+  color?: ColorSettings;
 }
 
 export interface SourceInfo {

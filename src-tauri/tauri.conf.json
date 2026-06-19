@@ -13,10 +13,10 @@
     "windows": [
       {
         "title": "RailTrack",
-        "width": 1024,
-        "height": 530,
-        "minWidth": 900,
-        "minHeight": 480,
+        "width": 1100,
+        "height": 720,
+        "minWidth": 940,
+        "minHeight": 560,
         "resizable": true,
         "fullscreen": false
       }

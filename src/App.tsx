@@ -19,9 +19,11 @@ import {
   type Progress,
 } from "./backend";
 import { projectFromUi } from "./projectFromUi";
-import { buildFfmpeg, buildProxyCommand } from "./engine/buildFfmpeg";
-import type { Codec, DenoiseFilter, TimelapseProject } from "./engine/project";
-import Preview from "./Preview";
+import { brightnessToGamma, buildFfmpeg, buildProxyCommand } from "./engine/buildFfmpeg";
+import type { Codec, DenoiseFilter, Keyframe, TimelapseProject } from "./engine/project";
+import { windowRect, centerFromXY } from "./cropMath";
+import Stage from "./Stage";
+import Timeline from "./Timeline";
 import "./App.css";
 
 const SETTINGS_KEY = "timelapse-studio.settings";
@@ -140,10 +142,13 @@ export default function App() {
   const [crf, setCrf] = useState(18);
   const [outputPath, setOutputPath] = useState("");
 
-  // window / pan
-  const [pan, setPan] = useState(200);
-  const [panReverse, setPanReverse] = useState(false);
-  const [yFrac, setYFrac] = useState(1); // 0 = top, 1 = bottom
+  // crop windows (the visual editor) — two keyframes' worth of framing.
+  // zoom = window size as a fraction of the max-fit; centers are 0..1 of source.
+  const [zoom, setZoom] = useState(0.85);
+  const [startC, setStartC] = useState({ cx: 0.45, cy: 0.5 });
+  const [endC, setEndC] = useState({ cx: 0.55, cy: 0.5 });
+  const [playhead, setPlayhead] = useState(0); // 0..1 timeline position
+  const [playing, setPlaying] = useState(false);
 
   // post
   const [denoiseOn, setDenoiseOn] = useState(false);
@@ -152,6 +157,16 @@ export default function App() {
   const [panSmooth, setPanSmooth] = useState(1); // export sub-pixel pan factor (1=off)
   const [fadeInSec, setFadeInSec] = useState(0);
   const [fadeOutSec, setFadeOutSec] = useState(0);
+  // color grade
+  const [exposure, setExposure] = useState(0);
+  const [brightness, setBrightness] = useState(0); // -0.3..1 -> eq gamma 0.7..2
+  const [contrast, setContrast] = useState(1); // 0.5..2 (eq)
+  const [highlights, setHighlights] = useState(0);
+  const [shadows, setShadows] = useState(0);
+  const [warmth, setWarmth] = useState(0); // -100 cool .. +100 warm -> Kelvin
+  const [tint, setTint] = useState(0);
+  const [vibrance, setVibrance] = useState(0);
+  const [saturation, setSaturation] = useState(1);
   const [starTrailOn, setStarTrailOn] = useState(false);
   const [trailDecay, setTrailDecay] = useState(1.0);
   const [trailStartFrac, setTrailStartFrac] = useState(0); // when trails begin
@@ -169,15 +184,51 @@ export default function App() {
   const outH = vertical ? presetW : presetH;
   const proxyReady = frameCount > 0 && proxyCount >= frameCount;
 
-  // Keyframes derived from the current pan/window settings — drives the preview.
-  const keyframes = useMemo(() => {
+  // The two crop windows (source px) derived from zoom + centers + output aspect.
+  const outAspect = outW / outH;
+  const startWin = useMemo(
+    () => windowRect(srcW, srcH, outAspect, zoom, startC.cx, startC.cy),
+    [srcW, srcH, outAspect, zoom, startC],
+  );
+  const endWin = useMemo(
+    () => windowRect(srcW, srcH, outAspect, zoom, endC.cx, endC.cy),
+    [srcW, srcH, outAspect, zoom, endC],
+  );
+  const keyframes = useMemo<Keyframe[]>(() => {
     if (!frameCount || !srcW) return [];
-    return projectFromUi({
-      sourceDir, glob, frameCount, srcW, srcH,
-      outW, outH, fps, codec, crf, outputPath: "",
-      pan, panReverse, yFrac,
-    }).keyframes;
-  }, [frameCount, srcW, srcH, outW, outH, pan, panReverse, yFrac, sourceDir, glob, fps, codec, crf]);
+    const last = Math.max(1, frameCount - 1);
+    return [
+      { frame: 0, ...startWin, easing: "linear" },
+      { frame: last, ...endWin, easing: "linear" },
+    ];
+  }, [frameCount, srcW, startWin, endWin]);
+
+  // Dragging a crop box on the Stage updates that endpoint's fractional center.
+  function handleDragWindow(which: "start" | "end", x: number, y: number) {
+    const c = centerFromXY(x, y, startWin.w, startWin.h, srcW, srcH);
+    if (which === "start") setStartC(c);
+    else setEndC(c);
+  }
+
+  // Animate the playhead when playing (sweeps the clip in ~6s, looping).
+  useEffect(() => {
+    if (!playing || !frameCount) return;
+    let raf = 0;
+    let last: number | null = null;
+    const tick = (t: number) => {
+      if (last != null) {
+        const dt = (t - last) / 1000;
+        setPlayhead((p) => {
+          const np = p + dt / 6;
+          return np >= 1 ? 0 : np;
+        });
+      }
+      last = t;
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [playing, frameCount]);
 
   // Estimated time remaining from ffmpeg's reported encode fps.
   const eta =
@@ -268,9 +319,19 @@ export default function App() {
 
   // Refresh total cache size whenever the Settings modal opens.
   useEffect(() => {
-    if (showSettings) refreshCacheSize();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showSettings]);
+    if (!showSettings) return;
+    let cancelled = false;
+    cacheSize(proxyBaseDir)
+      .then((bytes) => {
+        if (!cancelled) setCacheBytes(bytes);
+      })
+      .catch((e) => {
+        console.warn("cache size unavailable:", e);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [showSettings, proxyBaseDir]);
 
   async function clearAllCaches() {
     setError("");
@@ -295,6 +356,12 @@ export default function App() {
       setSrcW(r.width);
       setSrcH(r.height);
       setGlob(r.glob);
+      // reset the editor framing for the new source
+      setZoom(0.85);
+      setStartC({ cx: 0.45, cy: 0.5 });
+      setEndC({ cx: 0.55, cy: 0.5 });
+      setPlayhead(0);
+      setPlaying(false);
       setStatus(`Found ${r.frame_count} frames at ${r.width}×${r.height}`);
       await refreshProxyStatus(dir);
     } catch (e) {
@@ -332,7 +399,7 @@ export default function App() {
     return projectFromUi({
       sourceDir, glob, frameCount, srcW, srcH,
       outW, outH, fps, codec, crf, outputPath: outPath,
-      pan, panReverse, yFrac,
+      keyframes,
       denoise: denoiseOn
         ? { filter: denoiseFilterName, strength: denoiseStrength }
         : undefined,
@@ -341,6 +408,17 @@ export default function App() {
       trailEndFrac: starTrailOn ? trailEndFrac : undefined,
       fadeInSec,
       fadeOutSec,
+      color: {
+        exposure,
+        brightness,
+        contrast,
+        highlights,
+        shadows,
+        temperature: Math.round(6500 - warmth * 30),
+        tint,
+        vibrance,
+        saturation,
+      },
     });
   }
 
@@ -509,29 +587,7 @@ export default function App() {
             )}
           </Section>
 
-          <Section title="2 · Window &amp; pan" open={openSection === "window"} onToggle={() => toggle("window")}>
-            <div className="field">
-              <label>Pan — {pan}px {panReverse ? "(right → left)" : "(left → right)"}</label>
-              <input type="range" min={0} max={Math.max(400, srcW ? srcW - outW : 800)}
-                value={pan} onChange={(e) => setPan(+e.target.value)} />
-            </div>
-            <label className="check">
-              <input type="checkbox" checked={panReverse}
-                onChange={(e) => setPanReverse(e.target.checked)} />
-              Reverse direction
-            </label>
-            <div className="field">
-              <label>
-                Vertical position — {Math.round(yFrac * 100)}%
-                {keyframes[0] ? ` (y = ${keyframes[0].y}px)` : ""}
-                <span className="hint"> · 0% top, 100% bottom</span>
-              </label>
-              <input type="range" min={0} max={1} step={0.005} value={yFrac}
-                onChange={(e) => setYFrac(+e.target.value)} />
-            </div>
-          </Section>
-
-          <Section title="3 · Star trails (lighten stack)" open={openSection === "trails"} onToggle={() => toggle("trails")}>
+          <Section title="2 · Star trails (lighten stack)" open={openSection === "trails"} onToggle={() => toggle("trails")}>
             <label className="check">
               <input type="checkbox" checked={starTrailOn}
                 onChange={(e) => setStarTrailOn(e.target.checked)} />
@@ -547,33 +603,16 @@ export default function App() {
                   <input type="range" min={0.9} max={1} step={0.002} value={trailDecay}
                     onChange={(e) => setTrailDecay(+e.target.value)} />
                 </div>
-                <div className="field">
-                  <label>
-                    Trails start at — {Math.round(trailStartFrac * 100)}%
-                    {frameCount ? ` (frame ${Math.round(trailStartFrac * (frameCount - 1))})` : ""}
-                  </label>
-                  <input type="range" min={0} max={1} step={0.01} value={trailStartFrac}
-                    onChange={(e) => setTrailStartFrac(Math.min(+e.target.value, trailEndFrac))} />
-                </div>
-                <div className="field">
-                  <label>
-                    Trails end at — {trailEndFrac >= 1 ? "100% (run to end)" : `${Math.round(trailEndFrac * 100)}%`}
-                    {frameCount && trailEndFrac < 1 ? ` (frame ${Math.round(trailEndFrac * (frameCount - 1))})` : ""}
-                  </label>
-                  <input type="range" min={0} max={1} step={0.01} value={trailEndFrac}
-                    onChange={(e) => setTrailEndFrac(Math.max(+e.target.value, trailStartFrac))} />
-                </div>
                 <p className="muted">
-                  Start at 0% = trails from the beginning; higher plays a normal timelapse first,
-                  then trails form. End below 100% makes the trails retract back to points (the
-                  scene roughly holds during the retract, adding ~that many frames to the clip).
-                  Stacking is applied before the pan; denoise (if on) runs before stacking.
+                  Drag the <b>star-trail markers on the timeline</b> to set when trails start and
+                  end. Persistence below 1.000 fades trails (comet style); ending trails before the
+                  clip's end makes them retract back to a normal timelapse.
                 </p>
               </>
             )}
           </Section>
 
-          <Section title="4 · Post-processing" open={openSection === "post"} onToggle={() => toggle("post")}>
+          <Section title="3 · Post-processing" open={openSection === "post"} onToggle={() => toggle("post")}>
             <label className="check">
               <input type="checkbox" checked={denoiseOn}
                 onChange={(e) => setDenoiseOn(e.target.checked)} />
@@ -596,16 +635,80 @@ export default function App() {
                 </div>
               </div>
             )}
-            <div className="fieldGrid" style={{ marginTop: 10 }}>
-              <div className="field">
-                <label>Fade in from black (s)</label>
-                <input type="number" min={0} max={30} step={0.5} value={fadeInSec}
-                  onChange={(e) => setFadeInSec(Math.max(0, +e.target.value))} />
+            <div className="colorGrade">
+              <div className="row" style={{ justifyContent: "space-between", margin: "2px 0 4px" }}>
+                <span className="hint" style={{ fontSize: 12 }}>Color</span>
+                {(exposure !== 0 || brightness !== 0 || contrast !== 1 || highlights !== 0 || shadows !== 0 ||
+                  warmth !== 0 || tint !== 0 || vibrance !== 0 || saturation !== 1) && (
+                  <button className="link" onClick={() => {
+                    setExposure(0);
+                    setBrightness(0);
+                    setContrast(1);
+                    setHighlights(0);
+                    setShadows(0);
+                    setWarmth(0);
+                    setTint(0);
+                    setVibrance(0);
+                    setSaturation(1);
+                  }}>
+                    reset
+                  </button>
+                )}
               </div>
-              <div className="field">
-                <label>Fade out to black (s)</label>
-                <input type="number" min={0} max={30} step={0.5} value={fadeOutSec}
-                  onChange={(e) => setFadeOutSec(Math.max(0, +e.target.value))} />
+              <div className="row" style={{ margin: "0 0 8px" }}>
+                <span className="hint" style={{ fontSize: 11 }}>Light</span>
+              </div>
+              <div className="fieldGrid">
+                <div className="field">
+                  <label>Exposure — {exposure >= 0 ? "+" : ""}{exposure.toFixed(2)}</label>
+                  <input type="range" min={-0.5} max={0.5} step={0.01} value={exposure}
+                    onChange={(e) => setExposure(+e.target.value)} />
+                </div>
+                <div className="field">
+                  <label>Contrast — {contrast.toFixed(2)}×</label>
+                  <input type="range" min={0.5} max={2} step={0.02} value={contrast}
+                    onChange={(e) => setContrast(+e.target.value)} />
+                </div>
+                <div className="field">
+                  <label>Highlights — {highlights >= 0 ? "+" : ""}{Math.round(highlights)}</label>
+                  <input type="range" min={-100} max={100} step={1} value={highlights}
+                    onChange={(e) => setHighlights(+e.target.value)} />
+                </div>
+                <div className="field">
+                  <label>Shadows — {shadows >= 0 ? "+" : ""}{Math.round(shadows)}</label>
+                  <input type="range" min={-100} max={100} step={1} value={shadows}
+                    onChange={(e) => setShadows(+e.target.value)} />
+                </div>
+                <div className="field">
+                  <label>Gamma — {brightnessToGamma(brightness).toFixed(2)}</label>
+                  <input type="range" min={-0.3} max={1} step={0.01} value={brightness}
+                    onChange={(e) => setBrightness(+e.target.value)} />
+                </div>
+              </div>
+              <div className="row" style={{ margin: "4px 0 8px" }}>
+                <span className="hint" style={{ fontSize: 11 }}>Color</span>
+              </div>
+              <div className="fieldGrid">
+                <div className="field">
+                  <label>Temperature <span className="hint">· cool ← → warm</span></label>
+                  <input type="range" min={-100} max={100} step={1} value={warmth}
+                    onChange={(e) => setWarmth(+e.target.value)} />
+                </div>
+                <div className="field">
+                  <label>Tint <span className="hint">· green ← → magenta</span></label>
+                  <input type="range" min={-100} max={100} step={1} value={tint}
+                    onChange={(e) => setTint(+e.target.value)} />
+                </div>
+                <div className="field">
+                  <label>Vibrance — {vibrance >= 0 ? "+" : ""}{vibrance.toFixed(2)}</label>
+                  <input type="range" min={-1} max={1} step={0.02} value={vibrance}
+                    onChange={(e) => setVibrance(+e.target.value)} />
+                </div>
+                <div className="field">
+                  <label>Saturation — {saturation.toFixed(2)}×</label>
+                  <input type="range" min={0} max={2} step={0.02} value={saturation}
+                    onChange={(e) => setSaturation(+e.target.value)} />
+                </div>
               </div>
             </div>
             <div className="field" style={{ marginTop: 10 }}>
@@ -621,7 +724,7 @@ export default function App() {
             </div>
           </Section>
 
-          <Section title="5 · Output &amp; render" open={openSection === "output"} onToggle={() => toggle("output")}>
+          <Section title="4 · Output &amp; render" open={openSection === "output"} onToggle={() => toggle("output")}>
             <div className="fieldGrid">
               <div className="field">
                 <label>Resolution</label>
@@ -699,20 +802,44 @@ export default function App() {
           </Section>
         </div>
 
-        <div style={{width: '100%'}}>
-          <section className="panel preview-pane">
-            <h2>Preview</h2>
-            <Preview
-              ffmpegPath={ffmpegPath}
-              ready={ffmpegOk}
-              sourceDir={proxyReady ? proxyDir : sourceDir}
-              frameCount={frameCount}
-              srcW={srcW}
-              keyframes={keyframes}
-              outAspect={outW / outH}
-            />
-          </section>
-        </div>
+        <section className="panel preview-pane">
+          <Stage
+            ffmpegPath={ffmpegPath}
+            ready={ffmpegOk}
+            sourceDir={proxyReady ? proxyDir : sourceDir}
+            frameCount={frameCount}
+            srcW={srcW}
+            srcH={srcH}
+            startWin={startWin}
+            endWin={endWin}
+            playhead={playhead}
+            grade={{ exposure, brightness, contrast, highlights, shadows, warmth, tint, vibrance, saturation }}
+            onDragWindow={handleDragWindow}
+          />
+          <div className="stageBar">
+            <span className="zoomLabel">Zoom</span>
+            <input type="range" min={0.3} max={1} step={0.01} value={zoom}
+              disabled={!srcW} onChange={(e) => setZoom(+e.target.value)} className="grow" />
+            <span className="muted">drag the Start / End boxes to set the pan</span>
+          </div>
+          <Timeline
+            frameCount={frameCount}
+            fps={fps}
+            playhead={playhead}
+            onPlayhead={setPlayhead}
+            playing={playing}
+            onPlay={setPlaying}
+            fadeInSec={fadeInSec}
+            fadeOutSec={fadeOutSec}
+            onFadeIn={setFadeInSec}
+            onFadeOut={setFadeOutSec}
+            starTrail={starTrailOn}
+            trailStartFrac={trailStartFrac}
+            trailEndFrac={trailEndFrac}
+            onTrailStart={setTrailStartFrac}
+            onTrailEnd={setTrailEndFrac}
+          />
+        </section>
       </div>
 
       {showSettings && (

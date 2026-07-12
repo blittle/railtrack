@@ -16,10 +16,12 @@ import {
   probeDir,
   runFfmpeg,
   validateFfmpeg,
+  videotoolboxEncoders,
   type Progress,
 } from "./backend";
 import { projectFromUi } from "./projectFromUi";
 import { brightnessToGamma, buildFfmpeg, buildProxyCommand } from "./engine/buildFfmpeg";
+import { VIDEOTOOLBOX_ENCODER } from "./engine/project";
 import type { Codec, DenoiseFilter, Keyframe, TimelapseProject } from "./engine/project";
 import { windowRect, centerFromXY } from "./cropMath";
 import Stage from "./Stage";
@@ -139,6 +141,9 @@ export default function App() {
   const [vertical, setVertical] = useState(false);
   const [fps, setFps] = useState(30);
   const [codec, setCodec] = useState<Codec>("h264");
+  const [hwAccel, setHwAccel] = useState(false);
+  // VideoToolbox encoders the resolved ffmpeg build actually supports.
+  const [vtEncoders, setVtEncoders] = useState<string[]>([]);
   const [crf, setCrf] = useState(18);
   const [outputPath, setOutputPath] = useState("");
 
@@ -286,6 +291,17 @@ export default function App() {
     );
   }, [settingsLoaded, ffmpegPath, ffprobePath, proxyBaseDir, previewW, rebuildEachSession]);
 
+  // Probe which VideoToolbox encoders the current ffmpeg supports (gates the
+  // "Apple Silicon acceleration" checkbox). Re-runs whenever the binary changes.
+  useEffect(() => {
+    if (!ffmpegPath) { setVtEncoders([]); return; }
+    let cancelled = false;
+    videotoolboxEncoders(ffmpegPath)
+      .then((e) => { if (!cancelled) setVtEncoders(e); })
+      .catch(() => { if (!cancelled) setVtEncoders([]); });
+    return () => { cancelled = true; };
+  }, [ffmpegPath]);
+
   // subscribe to progress events
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -398,7 +414,9 @@ export default function App() {
   function currentProject(outPath: string): TimelapseProject {
     return projectFromUi({
       sourceDir, glob, frameCount, srcW, srcH,
-      outW, outH, fps, codec, crf, outputPath: outPath,
+      outW, outH, fps, codec, crf,
+      hwAccel: hwAccel && vtEncoders.includes(VIDEOTOOLBOX_ENCODER[codec]),
+      outputPath: outPath,
       keyframes,
       denoise: denoiseOn
         ? { filter: denoiseFilterName, strength: denoiseStrength }
@@ -762,6 +780,22 @@ export default function App() {
                 </div>
               )}
             </div>
+            {(() => {
+              const hwAvailable = vtEncoders.includes(VIDEOTOOLBOX_ENCODER[codec]);
+              return (
+                <label
+                  className={`check${hwAvailable ? "" : " disabled"}`}
+                  title={hwAvailable
+                    ? "Encode on Apple Silicon's hardware media engine (VideoToolbox) — much faster. Quality is driven by the CRF slider, mapped to VideoToolbox's constant-quality scale."
+                    : `This ffmpeg build has no ${VIDEOTOOLBOX_ENCODER[codec]} encoder, so hardware acceleration isn't available for ${codec.toUpperCase()}.`}>
+                  <input type="checkbox" checked={hwAccel && hwAvailable}
+                    disabled={!hwAvailable}
+                    onChange={(e) => setHwAccel(e.target.checked)} />
+                  Apple Silicon acceleration
+                  {!hwAvailable && <span className="hint">(not in this ffmpeg build)</span>}
+                </label>
+              );
+            })()}
 
             <div className="field">
               <label>Destination file</label>

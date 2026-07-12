@@ -13,6 +13,7 @@ import type {
   OutputSettings,
   TimelapseProject,
 } from "./project";
+import { VIDEOTOOLBOX_ENCODER } from "./project";
 import { hasZoom } from "./interpolate";
 
 export class ZoomNotSupportedError extends Error {
@@ -182,16 +183,37 @@ export function gradeFilter(c: ColorSettings): string {
   return parts.join(",");
 }
 
+/**
+ * Map the CRF slider (12..30, lower = better) onto VideoToolbox's constant-quality
+ * scale (-q:v, 1..100, higher = better). VideoToolbox has no CRF; this keeps the
+ * one quality control meaningful across both encoder families. crf 12 -> ~85,
+ * crf 18 -> ~72, crf 30 -> ~45.
+ */
+function crfToVtQuality(crf: number): number {
+  const q = Math.round(((30 - crf) / (30 - 12)) * 40 + 45);
+  return Math.max(1, Math.min(100, q));
+}
+
 function videoCodecArgs(o: OutputSettings): string[] {
+  const hw = o.hwAccel;
   switch (o.codec) {
     case "h264":
-      return ["-c:v", "libx264", "-preset", "slow", "-crf", String(o.crf),
-              "-pix_fmt", "yuv420p"];
+      // VideoToolbox rejects x264's -preset/-crf; drive quality with -q:v instead.
+      return hw
+        ? ["-c:v", VIDEOTOOLBOX_ENCODER.h264, "-q:v", String(crfToVtQuality(o.crf)),
+           "-pix_fmt", "yuv420p"]
+        : ["-c:v", "libx264", "-preset", "slow", "-crf", String(o.crf),
+           "-pix_fmt", "yuv420p"];
     case "h265":
-      return ["-c:v", "libx265", "-preset", "slow", "-crf", String(o.crf),
-              "-pix_fmt", "yuv420p", "-tag:v", "hvc1"];
+      return hw
+        ? ["-c:v", VIDEOTOOLBOX_ENCODER.h265, "-q:v", String(crfToVtQuality(o.crf)),
+           "-pix_fmt", "yuv420p", "-tag:v", "hvc1"]
+        : ["-c:v", "libx265", "-preset", "slow", "-crf", String(o.crf),
+           "-pix_fmt", "yuv420p", "-tag:v", "hvc1"];
     case "prores":
-      return ["-c:v", "prores_ks", "-profile:v", "3", "-pix_fmt", "yuv422p10le"];
+      return hw
+        ? ["-c:v", VIDEOTOOLBOX_ENCODER.prores, "-profile:v", "3", "-pix_fmt", "yuv422p10le"]
+        : ["-c:v", "prores_ks", "-profile:v", "3", "-pix_fmt", "yuv422p10le"];
   }
 }
 

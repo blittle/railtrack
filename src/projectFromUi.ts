@@ -24,6 +24,8 @@ export interface UiSettings {
   fps: number;
   codec: Codec;
   crf: number;
+  /** Encode via Apple Silicon VideoToolbox (hardware) instead of the software encoder. */
+  hwAccel: boolean;
   outputPath: string;
 
   /** The two crop windows (start & end), in source pixels, from the editor. */
@@ -75,6 +77,7 @@ export function projectFromUi(s: UiSettings): TimelapseProject {
       fps: s.fps,
       codec: s.codec,
       crf: s.crf,
+      hwAccel: s.hwAccel,
       scaleFlags: "lanczos",
     },
     keyframes: s.keyframes,

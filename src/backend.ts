@@ -28,6 +28,10 @@ export const detectFfprobe = () => invoke<string | null>("detect_ffprobe");
 export const validateFfmpeg = (path: string) =>
   invoke<boolean>("validate_ffmpeg", { path });
 
+/** Which VideoToolbox (Apple Silicon HW) encoders this ffmpeg build supports. */
+export const videotoolboxEncoders = (path: string) =>
+  invoke<string[]>("videotoolbox_encoders", { path });
+
 export const probeDir = (dir: string, ffprobePath: string) =>
   invoke<ProbeResult>("probe_dir", { dir, ffprobePath });
 

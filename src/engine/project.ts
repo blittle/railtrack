@@ -26,6 +26,13 @@ export interface Keyframe {
 
 export type Codec = "h264" | "h265" | "prores";
 
+/** The VideoToolbox (Apple Silicon hardware) encoder each codec maps to. */
+export const VIDEOTOOLBOX_ENCODER: Record<Codec, string> = {
+  h264: "h264_videotoolbox",
+  h265: "hevc_videotoolbox",
+  prores: "prores_videotoolbox",
+};
+
 export interface OutputSettings {
   w: number; // output width  (e.g. 3840)
   h: number; // output height (e.g. 2160)
@@ -33,6 +40,12 @@ export interface OutputSettings {
   fps: number;
   codec: Codec;
   crf: number; // quality for x264/x265 (lower = better)
+  /**
+   * Encode on Apple Silicon's hardware media engine via VideoToolbox
+   * (h264_videotoolbox / hevc_videotoolbox / prores_videotoolbox). Much faster,
+   * but constant-quality is driven by -q:v rather than -crf (see buildFfmpeg).
+   */
+  hwAccel?: boolean;
   scaleFlags: "lanczos" | "bicubic" | "bilinear";
 }
 

@@ -101,6 +101,30 @@ fn validate_ffmpeg(path: String) -> bool {
     tool_works(&path)
 }
 
+/// Names of the VideoToolbox (Apple Silicon hardware) encoders this ffmpeg build
+/// actually supports, e.g. ["h264_videotoolbox", "hevc_videotoolbox"]. Empty if
+/// the binary lacks VideoToolbox or can't be run. The UI uses this to gate the
+/// "Apple Silicon acceleration" checkbox per codec.
+#[tauri::command]
+fn videotoolbox_encoders(path: String) -> Vec<String> {
+    let out = Command::new(&path)
+        .args(["-hide_banner", "-encoders"])
+        .stderr(Stdio::null())
+        .output();
+    let stdout = match out {
+        Ok(o) if o.status.success() => o.stdout,
+        _ => return Vec::new(),
+    };
+    let text = String::from_utf8_lossy(&stdout);
+    ["h264_videotoolbox", "hevc_videotoolbox", "prores_videotoolbox"]
+        .into_iter()
+        // `-encoders` lists each as a token on its own line; a substring match on
+        // the whole token is enough and avoids parsing the column layout.
+        .filter(|enc| text.split_whitespace().any(|tok| tok == *enc))
+        .map(String::from)
+        .collect()
+}
+
 /// Scan a directory for JPEG frames and probe the first one's dimensions.
 #[tauri::command]
 fn probe_dir(dir: String, ffprobe_path: String) -> Result<ProbeResult, String> {
@@ -437,6 +461,7 @@ pub fn run() {
             detect_ffmpeg,
             detect_ffprobe,
             validate_ffmpeg,
+            videotoolbox_encoders,
             probe_dir,
             frame_proxy,
             prepare_proxy_dir,

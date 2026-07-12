@@ -68,6 +68,29 @@ describe("buildFfmpeg", () => {
     ]);
   });
 
+  it("uses VideoToolbox encoders with -q:v (not -crf) when hwAccel is on", () => {
+    const h264 = buildFfmpeg(
+      canonicalProject({ output: { ...canonicalProject().output, hwAccel: true } }),
+    ).args;
+    expect(h264).toContain("h264_videotoolbox");
+    expect(h264).not.toContain("libx264");
+    expect(h264).not.toContain("-crf");
+    expect(h264).not.toContain("-preset");
+    expect(h264).toContain("-q:v");
+
+    const h265 = buildFfmpeg(
+      canonicalProject({ output: { ...canonicalProject().output, codec: "h265", hwAccel: true } }),
+    ).args;
+    expect(h265).toContain("hevc_videotoolbox");
+    expect(h265).toContain("hvc1"); // hevc tag still applied
+
+    const prores = buildFfmpeg(
+      canonicalProject({ output: { ...canonicalProject().output, codec: "prores", hwAccel: true } }),
+    ).args;
+    expect(prores).toContain("prores_videotoolbox");
+    expect(prores).not.toContain("prores_ks");
+  });
+
   it("appends color grade (eq gamma + colortemperature) before any fade", () => {
     const { filtergraph } = buildFfmpeg(
       canonicalProject({

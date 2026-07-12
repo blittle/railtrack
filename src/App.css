@@ -348,6 +348,8 @@ button.danger { background: #b3402f; border-color: #b3402f; }
   cursor: pointer;
 }
 .check input { margin: 0; }
+.check.disabled { opacity: 0.45; cursor: not-allowed; }
+.check.disabled input { cursor: not-allowed; }
 
 .statLine {
   display: flex;

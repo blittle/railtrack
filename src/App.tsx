@@ -102,6 +102,8 @@ export default function App() {
   const [ffmpegPath, setFfmpegPath] = useState("");
   const [ffprobePath, setFfprobePath] = useState("");
   const [ffmpegOk, setFfmpegOk] = useState(false);
+  // Why validation failed (loader error, non-zero exit, …); shown in Settings.
+  const [ffmpegErr, setFfmpegErr] = useState<string | null>(null);
 
   // settings
   const [proxyBaseDir, setProxyBaseDir] = useState(""); // "" = system temp
@@ -258,10 +260,10 @@ export default function App() {
       try {
         if (typeof s.ffmpegPath === "string" && s.ffmpegPath) {
           setFfmpegPath(s.ffmpegPath);
-          setFfmpegOk(await validateFfmpeg(s.ffmpegPath));
+          await checkFfmpeg(s.ffmpegPath);
         } else {
           const fm = await detectFfmpeg();
-          if (fm) { setFfmpegPath(fm); setFfmpegOk(true); }
+          if (fm) { setFfmpegPath(fm); setFfmpegOk(true); setFfmpegErr(null); }
         }
         if (typeof s.ffprobePath === "string" && s.ffprobePath) {
           setFfprobePath(s.ffprobePath);
@@ -385,11 +387,18 @@ export default function App() {
     }
   }
 
+  // Validate an ffmpeg path and record both the verdict and (on failure) why.
+  async function checkFfmpeg(path: string) {
+    const r = await validateFfmpeg(path);
+    setFfmpegOk(r.ok);
+    setFfmpegErr(r.ok ? null : r.detail);
+  }
+
   async function chooseFfmpeg() {
     const f = await pickFile();
     if (!f) return;
     setFfmpegPath(f);
-    setFfmpegOk(await validateFfmpeg(f));
+    await checkFfmpeg(f);
   }
 
   async function chooseFfprobe() {
@@ -894,9 +903,12 @@ export default function App() {
                 <input className="grow" placeholder="path to ffmpeg"
                   value={ffmpegPath}
                   onChange={(e) => setFfmpegPath(e.target.value)}
-                  onBlur={async () => setFfmpegOk(await validateFfmpeg(ffmpegPath))} />
+                  onBlur={() => checkFfmpeg(ffmpegPath)} />
                 <button onClick={chooseFfmpeg}>Browse…</button>
               </div>
+              {!ffmpegOk && ffmpegErr && (
+                <pre className="toolError">{ffmpegErr}</pre>
+              )}
             </div>
             <div className="field">
               <label>ffprobe path</label>

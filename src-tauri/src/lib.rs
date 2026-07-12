@@ -46,15 +46,75 @@ struct Progress {
     done: bool,
 }
 
+/// Build a Command for an external media tool (ffmpeg/ffprobe) with a sanitized
+/// child environment.
+///
+/// When we ship as an AppImage, its `AppRun` exports `LD_LIBRARY_PATH` /
+/// `LD_PRELOAD` pointing into the bundle. Rust's `Command` inherits the parent
+/// env, so a *system* ffmpeg spawned from the app would load the AppImage's
+/// bundled libraries, hit an incompatible glibc/lib and abort — the classic
+/// "works in a terminal, fails when launched from the app" bug.
+///
+/// Critically, we must NOT scrub for our OWN bundled sidecar (externalBin), which
+/// lives under `$APPDIR` and is dynamically linked against those same bundled
+/// libraries — it *needs* the bundle's `LD_LIBRARY_PATH`. So we only scrub when
+/// the tool lives outside `$APPDIR` (a system ffmpeg on PATH). Some AppRun scripts
+/// stash the pre-bundle values as `*_ORIG`; restore those when present, otherwise
+/// drop the var so the child resolves against system libraries.
+fn media_command(path: &str) -> Command {
+    let mut cmd = Command::new(path);
+    // $APPDIR is the mounted bundle root; only set when running as an AppImage.
+    if let Some(appdir) = std::env::var_os("APPDIR") {
+        let inside_bundle = std::path::Path::new(path).starts_with(&appdir);
+        if !inside_bundle {
+            for var in ["LD_LIBRARY_PATH", "LD_PRELOAD"] {
+                match std::env::var_os(format!("{var}_ORIG")) {
+                    Some(orig) => { cmd.env(var, orig); }
+                    None => { cmd.env_remove(var); }
+                }
+            }
+        }
+    }
+    cmd
+}
+
+/// Result of probing a tool binary: whether `<path> -version` ran successfully,
+/// plus a human-readable reason when it didn't (surfaced in the UI).
+#[derive(Serialize, Clone)]
+struct ToolCheck {
+    ok: bool,
+    detail: Option<String>,
+}
+
+/// Run `<path> -version` and report success plus, on failure, WHY — distinguishing
+/// "couldn't spawn" (missing/not executable) from "ran but exited non-zero" (e.g.
+/// a loader error from a polluted library path), with the stderr tail attached.
+fn check_tool(path: &str) -> ToolCheck {
+    match media_command(path).arg("-version").output() {
+        Ok(o) if o.status.success() => ToolCheck { ok: true, detail: None },
+        Ok(o) => {
+            let code = o
+                .status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "a signal".into());
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            let tail: Vec<&str> = stderr.lines().rev().take(4).collect();
+            let tail = tail.into_iter().rev().collect::<Vec<_>>().join("\n");
+            let detail = if tail.trim().is_empty() {
+                format!("ran but exited with code {code}")
+            } else {
+                format!("ran but exited with code {code}:\n{tail}")
+            };
+            ToolCheck { ok: false, detail: Some(detail) }
+        }
+        Err(e) => ToolCheck { ok: false, detail: Some(format!("could not run: {e}")) },
+    }
+}
+
 /// Return true if `<path> -version` runs successfully.
 fn tool_works(path: &str) -> bool {
-    Command::new(path)
-        .arg("-version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    check_tool(path).ok
 }
 
 /// A bundled sidecar binary sits next to the app executable (Tauri externalBin).
@@ -97,8 +157,8 @@ fn detect_ffprobe() -> Option<String> {
 }
 
 #[tauri::command]
-fn validate_ffmpeg(path: String) -> bool {
-    tool_works(&path)
+fn validate_ffmpeg(path: String) -> ToolCheck {
+    check_tool(&path)
 }
 
 /// Names of the VideoToolbox (Apple Silicon hardware) encoders this ffmpeg build
@@ -107,7 +167,7 @@ fn validate_ffmpeg(path: String) -> bool {
 /// "Apple Silicon acceleration" checkbox per codec.
 #[tauri::command]
 fn videotoolbox_encoders(path: String) -> Vec<String> {
-    let out = Command::new(&path)
+    let out = media_command(&path)
         .args(["-hide_banner", "-encoders"])
         .stderr(Stdio::null())
         .output();
@@ -134,7 +194,7 @@ fn probe_dir(dir: String, ffprobe_path: String) -> Result<ProbeResult, String> {
     }
 
     let first_path = files[0].clone();
-    let out = Command::new(&ffprobe_path)
+    let out = media_command(&ffprobe_path)
         .args([
             "-v", "error",
             "-select_streams", "v:0",
@@ -280,7 +340,7 @@ fn frame_proxy(
         format!("{grade},{scale}")
     };
 
-    let out = Command::new(&ffmpeg_path)
+    let out = media_command(&ffmpeg_path)
         .args(["-v", "error", "-y", "-i"])
         .arg(&files[i])
         .args([
@@ -327,7 +387,7 @@ async fn run_ffmpeg(
     ]);
     full.push(output);
 
-    let mut child = Command::new(&ffmpeg_path)
+    let mut child = media_command(&ffmpeg_path)
         .args(&full)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -422,7 +482,9 @@ fn open_file(path: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     let prog = "explorer";
 
-    Command::new(prog)
+    // Sanitize the env too: from inside an AppImage, the bundle's LD_LIBRARY_PATH
+    // would otherwise leak into the system player and can break it the same way.
+    media_command(prog)
         .arg(&path)
         .spawn()
         .map_err(|e| format!("failed to open file: {e}"))?;

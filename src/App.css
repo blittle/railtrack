@@ -351,6 +351,20 @@ button.danger { background: #b3402f; border-color: #b3402f; }
 .check.disabled { opacity: 0.45; cursor: not-allowed; }
 .check.disabled input { cursor: not-allowed; }
 
+.toolError {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  background: #2a1416;
+  border: 1px solid #6b2b2f;
+  border-radius: 6px;
+  color: #f0b4b4;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+
 .statLine {
   display: flex;
   align-items: center;

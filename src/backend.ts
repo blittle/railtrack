@@ -25,8 +25,14 @@ export interface Progress {
 
 export const detectFfmpeg = () => invoke<string | null>("detect_ffmpeg");
 export const detectFfprobe = () => invoke<string | null>("detect_ffprobe");
+export interface ToolCheck {
+  ok: boolean;
+  /** Human-readable failure reason when ok is false (e.g. loader error tail). */
+  detail: string | null;
+}
+
 export const validateFfmpeg = (path: string) =>
-  invoke<boolean>("validate_ffmpeg", { path });
+  invoke<ToolCheck>("validate_ffmpeg", { path });
 
 /** Which VideoToolbox (Apple Silicon HW) encoders this ffmpeg build supports. */
 export const videotoolboxEncoders = (path: string) =>

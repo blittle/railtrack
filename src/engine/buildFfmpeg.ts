@@ -9,6 +9,7 @@
 import type {
   ColorSettings,
   DenoiseSettings,
+  FrameStackSettings,
   Keyframe,
   OutputSettings,
   TimelapseProject,
@@ -140,6 +141,27 @@ export function denoiseFilter(d: DenoiseSettings): string {
   return `fftdnoiz=sigma=${sigma}`;
 }
 
+/**
+ * Temporal frame-stacking filter for noise reduction.
+ * - median: `tmedian=radius=r` — picks the per-pixel median across 2r+1 frames,
+ *   rejecting transient outliers (satellites/planes/hot pixels).
+ * - mean: `tmix=frames=n` with triangular (center-weighted) weights so the
+ *   current frame dominates and stacking softens noise without over-blurring.
+ * Both preserve the frame count (a trailing/centered window), so no downstream
+ * frame-count math changes.
+ */
+export function frameStackFilter(s: FrameStackSettings): string {
+  const n = Math.max(2, Math.min(15, Math.floor(s.frames)));
+  if (s.mode === "median") {
+    // tmedian needs an odd window (2r+1); radius from the requested size.
+    return `tmedian=radius=${Math.max(1, Math.floor(n / 2))}`;
+  }
+  // Triangular weights, e.g. n=5 -> "1 2 3 2 1"; tmix normalizes by their sum.
+  const mid = (n - 1) / 2;
+  const w = Array.from({ length: n }, (_, i) => num(mid - Math.abs(i - mid) + 1));
+  return `tmix=frames=${n}:weights='${w.join(" ")}'`;
+}
+
 export function brightnessToGamma(brightness: number): number {
   return Math.max(0.1, Math.min(10, 1 + brightness));
 }
@@ -257,6 +279,14 @@ export function buildFfmpeg(p: TimelapseProject, opts: BuildOptions = {}): Built
   // Denoise runs before stacking when trailing (so noise isn't baked into trails);
   // otherwise after scaling (cheaper). Preview skips denoise for speed.
   const denoise = preview || !p.post.denoise ? null : denoiseFilter(p.post.denoise);
+  // Temporal frame stacking (noise reduction) runs on the raw pre-crop frames,
+  // ahead of everything else, so the pan is applied after the blend (no pan
+  // ghosting). Kept in previews — unlike denoise — so the effect is visible.
+  const stack = p.post.frameStack ? frameStackFilter(p.post.frameStack) : null;
+  // Shared pre-crop prefix for the complex (star-trail) filtergraphs: stack, then
+  // denoise, applied before the stream is split. Empty when neither is active.
+  const preHead = [stack, denoise].filter(Boolean).join(",");
+  const head = preHead ? `${preHead},` : "";
   const decayNum = trail ? Math.min(1, Math.max(0, trail.decay)) : 1;
   const decay = num(decayNum);
 
@@ -317,7 +347,6 @@ export function buildFfmpeg(p: TimelapseProject, opts: BuildOptions = {}): Built
     // stream into the plain timelapse over a short window after `end`, so trails
     // dissolve away while the scene keeps playing live. No added frames; both
     // streams share crop("n") so they stay aligned and the pan tracks normally.
-    const head = denoise ? `${denoise},` : "";
     const fadeLen = Math.min(N - 1 - end, Math.max(1, Math.round(p.output.fps * 1.5)));
     const cropScale = windowCropScale("n");
     const alpha = escapeExpr(`clip((N-${end})/${fadeLen},0,1)`);
@@ -347,7 +376,6 @@ export function buildFfmpeg(p: TimelapseProject, opts: BuildOptions = {}): Built
     const K = (N - 1) / (outputFrames - 1);
     const fv = (offset: number) => `(${num(K)}*(n+${offset}))`;
     const cs = (offset: number) => windowCropScale(fv(offset));
-    const head = denoise ? `${denoise},` : "";
 
     // Retract C: do the (reverse) max on a downscaled FIXED full frame so the
     // window can move afterwards without smearing trails — and so `reverse`'s
@@ -388,7 +416,6 @@ export function buildFfmpeg(p: TimelapseProject, opts: BuildOptions = {}): Built
     graphArgs = ["-filter_complex", filtergraph, "-map", "[outv]", "-r", String(p.output.fps)];
   } else if (trail && delayedStart) {
     // delayed start, trail runs to the end of the clip (no retract)
-    const head = denoise ? `${denoise},` : "";
     filtergraph =
       `[0:v]${head}split=2[a][b];` +
       `[a]trim=end_frame=${start},setpts=PTS-STARTPTS[pre];` +
@@ -397,6 +424,7 @@ export function buildFfmpeg(p: TimelapseProject, opts: BuildOptions = {}): Built
     graphArgs = ["-filter_complex", filtergraph, "-map", "[outv]", "-r", String(p.output.fps)];
   } else {
     const parts: string[] = [];
+    if (stack) parts.push(stack); // pre-crop temporal noise reduction, first
     if (denoise && trail) parts.push(denoise); // before lagfun
     if (trail) parts.push(`lagfun=decay=${decay}`);
     parts.push(windowCropScale("n"));

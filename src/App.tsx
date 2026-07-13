@@ -22,7 +22,7 @@ import {
 import { projectFromUi } from "./projectFromUi";
 import { brightnessToGamma, buildFfmpeg, buildProxyCommand } from "./engine/buildFfmpeg";
 import { VIDEOTOOLBOX_ENCODER } from "./engine/project";
-import type { Codec, DenoiseFilter, Keyframe, TimelapseProject } from "./engine/project";
+import type { Codec, DenoiseFilter, FrameStackMode, Keyframe, TimelapseProject } from "./engine/project";
 import { windowRect, centerFromXY } from "./cropMath";
 import Stage from "./Stage";
 import Timeline from "./Timeline";
@@ -161,6 +161,10 @@ export default function App() {
   const [denoiseOn, setDenoiseOn] = useState(false);
   const [denoiseFilterName, setDenoiseFilterName] = useState<DenoiseFilter>("hqdn3d");
   const [denoiseStrength, setDenoiseStrength] = useState(0.5);
+  // Temporal frame stacking (cross-frame noise reduction)
+  const [frameStackOn, setFrameStackOn] = useState(false);
+  const [frameStackMode, setFrameStackMode] = useState<FrameStackMode>("median");
+  const [frameStackFrames, setFrameStackFrames] = useState(3);
   const [panSmooth, setPanSmooth] = useState(1); // export sub-pixel pan factor (1=off)
   const [fadeInSec, setFadeInSec] = useState(0);
   const [fadeOutSec, setFadeOutSec] = useState(0);
@@ -427,6 +431,9 @@ export default function App() {
       hwAccel: hwAccel && vtEncoders.includes(VIDEOTOOLBOX_ENCODER[codec]),
       outputPath: outPath,
       keyframes,
+      frameStack: frameStackOn
+        ? { frames: frameStackFrames, mode: frameStackMode }
+        : undefined,
       denoise: denoiseOn
         ? { filter: denoiseFilterName, strength: denoiseStrength }
         : undefined,
@@ -661,6 +668,34 @@ export default function App() {
                     onChange={(e) => setDenoiseStrength(+e.target.value)} />
                 </div>
               </div>
+            )}
+            <label className="check">
+              <input type="checkbox" checked={frameStackOn}
+                onChange={(e) => setFrameStackOn(e.target.checked)} />
+              Frame stacking <span className="hint">(cross-frame noise reduction)</span>
+            </label>
+            {frameStackOn && (
+              <div className="fieldGrid">
+                <div className="field">
+                  <label>Mode</label>
+                  <select value={frameStackMode}
+                    onChange={(e) => setFrameStackMode(e.target.value as FrameStackMode)}>
+                    <option value="median">Median (rejects planes/satellites)</option>
+                    <option value="mean">Mean (gentle average)</option>
+                  </select>
+                </div>
+                <div className="field">
+                  <label>Window — {frameStackFrames} frames</label>
+                  <input type="range" min={2} max={15} step={1} value={frameStackFrames}
+                    onChange={(e) => setFrameStackFrames(+e.target.value)} />
+                </div>
+              </div>
+            )}
+            {frameStackOn && (
+              <p className="hint" style={{ fontSize: 12, margin: "2px 0 0" }}>
+                Stacks each frame with its neighbours to cut noise. Wider windows are
+                cleaner but soften/trail moving stars.
+              </p>
             )}
             <div className="colorGrade">
               <div className="row" style={{ justifyContent: "space-between", margin: "2px 0 4px" }}>

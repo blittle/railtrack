@@ -7,6 +7,7 @@ import type {
   Codec,
   ColorSettings,
   DenoiseSettings,
+  FrameStackSettings,
   Keyframe,
   StarTrailSettings,
   TimelapseProject,
@@ -32,6 +33,7 @@ export interface UiSettings {
   keyframes: Keyframe[];
 
   denoise?: DenoiseSettings;
+  frameStack?: FrameStackSettings;
   starTrail?: StarTrailSettings;
   /** When trails begin, as a fraction of the timeline (0 = from start). */
   trailStartFrac?: number;
@@ -83,6 +85,7 @@ export function projectFromUi(s: UiSettings): TimelapseProject {
     keyframes: s.keyframes,
     post: {
       ...(s.denoise ? { denoise: s.denoise } : {}),
+      ...(s.frameStack ? { frameStack: s.frameStack } : {}),
       ...(s.starTrail
         ? {
             starTrail: {

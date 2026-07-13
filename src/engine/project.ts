@@ -57,6 +57,22 @@ export interface DenoiseSettings {
   strength: number;
 }
 
+export type FrameStackMode = "median" | "mean";
+
+/**
+ * Temporal frame stacking for noise reduction: blend each output frame with a
+ * small window of its neighbours. `median` (tmedian) rejects transient outliers
+ * (satellites, planes, hot pixels); `mean` (weighted tmix) is a gentler average.
+ * Runs pre-crop on the raw frames so the pan doesn't smear into ghosting.
+ * NOTE: stacking trades against motion sharpness — a wider window reduces noise
+ * more but softens/trails moving stars.
+ */
+export interface FrameStackSettings {
+  /** Window size in frames (2..15). Odd values give a symmetric-ish window. */
+  frames: number;
+  mode: FrameStackMode;
+}
+
 export interface StarTrailSettings {
   /**
    * Per-frame persistence of the lighten (max) stack, 0..1.
@@ -106,6 +122,8 @@ export interface ColorSettings {
 
 export interface PostSettings {
   denoise?: DenoiseSettings;
+  /** Temporal noise reduction by stacking neighbouring frames (pre-crop). */
+  frameStack?: FrameStackSettings;
   starTrail?: StarTrailSettings;
   fade?: FadeSettings;
   color?: ColorSettings;

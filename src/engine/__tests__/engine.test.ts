@@ -91,6 +91,40 @@ describe("buildFfmpeg", () => {
     expect(prores).not.toContain("prores_ks");
   });
 
+  it("inserts temporal frame stacking pre-crop (median rejects outliers)", () => {
+    const { filtergraph } = buildFfmpeg(
+      canonicalProject({ post: { frameStack: { frames: 5, mode: "median" } } }),
+    );
+    // tmedian with radius = floor(5/2) = 2, and it runs BEFORE the crop/scale.
+    expect(filtergraph.startsWith("tmedian=radius=2,")).toBe(true);
+    expect(filtergraph.indexOf("tmedian")).toBeLessThan(filtergraph.indexOf("crop="));
+  });
+
+  it("mean stacking uses center-weighted tmix", () => {
+    const { filtergraph } = buildFfmpeg(
+      canonicalProject({ post: { frameStack: { frames: 5, mode: "mean" } } }),
+    );
+    expect(filtergraph.startsWith("tmix=frames=5:weights='1 2 3 2 1',")).toBe(true);
+  });
+
+  it("stacking precedes denoise and lagfun in the star-trail graph", () => {
+    const { filtergraph } = buildFfmpeg(
+      canonicalProject({
+        post: {
+          frameStack: { frames: 3, mode: "median" },
+          denoise: { filter: "hqdn3d", strength: 0.5 },
+          starTrail: { decay: 1 },
+        },
+      }),
+    );
+    const s = filtergraph.indexOf("tmedian");
+    const d = filtergraph.indexOf("hqdn3d");
+    const l = filtergraph.indexOf("lagfun");
+    expect(s).toBeGreaterThanOrEqual(0);
+    expect(s).toBeLessThan(d);
+    expect(d).toBeLessThan(l);
+  });
+
   it("appends color grade (eq gamma + colortemperature) before any fade", () => {
     const { filtergraph } = buildFfmpeg(
       canonicalProject({

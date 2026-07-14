@@ -6,9 +6,12 @@
 import type {
   Codec,
   ColorSettings,
+  DebandSettings,
+  DeflickerSettings,
   DenoiseSettings,
   FrameStackSettings,
   Keyframe,
+  LightenSpeedupSettings,
   StarTrailSettings,
   TimelapseProject,
 } from "./engine/project";
@@ -32,8 +35,10 @@ export interface UiSettings {
   /** The two crop windows (start & end), in source pixels, from the editor. */
   keyframes: Keyframe[];
 
+  deflicker?: DeflickerSettings;
   denoise?: DenoiseSettings;
   frameStack?: FrameStackSettings;
+  lightenSpeedup?: LightenSpeedupSettings;
   starTrail?: StarTrailSettings;
   /** When trails begin, as a fraction of the timeline (0 = from start). */
   trailStartFrac?: number;
@@ -44,6 +49,8 @@ export interface UiSettings {
   fadeOutSec?: number;
   /** Color grade (tone + color controls). */
   color?: ColorSettings;
+  /** Gradient debanding (post-grade). */
+  deband?: DebandSettings;
 }
 
 function neutralColor(c?: ColorSettings): boolean {
@@ -84,8 +91,10 @@ export function projectFromUi(s: UiSettings): TimelapseProject {
     },
     keyframes: s.keyframes,
     post: {
+      ...(s.deflicker ? { deflicker: s.deflicker } : {}),
       ...(s.denoise ? { denoise: s.denoise } : {}),
       ...(s.frameStack ? { frameStack: s.frameStack } : {}),
+      ...(s.lightenSpeedup ? { lightenSpeedup: s.lightenSpeedup } : {}),
       ...(s.starTrail
         ? {
             starTrail: {
@@ -103,6 +112,7 @@ export function projectFromUi(s: UiSettings): TimelapseProject {
         ? { fade: { inSec: s.fadeInSec ?? 0, outSec: s.fadeOutSec ?? 0 } }
         : {}),
       ...(neutralColor(s.color) ? {} : { color: s.color }),
+      ...(s.deband ? { deband: s.deband } : {}),
     },
   };
 }

@@ -8,9 +8,12 @@
 
 import type {
   ColorSettings,
+  DebandSettings,
+  DeflickerSettings,
   DenoiseSettings,
   FrameStackSettings,
   Keyframe,
+  LightenSpeedupSettings,
   OutputSettings,
   TimelapseProject,
 } from "./project";
@@ -136,9 +139,27 @@ export function denoiseFilter(d: DenoiseSettings): string {
     const lt = num(+(s * 12).toFixed(2));
     return `hqdn3d=${ls}:${cs}:${lt}:0`;
   }
+  if (d.filter === "nlmeans") {
+    // Highest quality, slowest. Map strength 0..1 -> denoise strength s 1..10
+    // (ffmpeg allows up to 30, but past ~10 it smears detail). Patch/research
+    // windows keep their defaults.
+    const str = num(+(1 + s * 9).toFixed(2));
+    return `nlmeans=s=${str}`;
+  }
   // fftdnoiz: strength 0.5 -> sigma 4 (matches our validated preset)
   const sigma = num(+(s * 8).toFixed(2));
   return `fftdnoiz=sigma=${sigma}`;
+}
+
+/**
+ * Deband filter: raise the per-plane thresholds from ffmpeg's gentle 0.02 default
+ * so smooth gradients (skies) lose their stepped banding. Strength 0..1 maps to
+ * ~0.005..0.06; past that it starts eroding real detail.
+ */
+export function debandFilter(d: DebandSettings): string {
+  const s = Math.min(1, Math.max(0, d.strength));
+  const thr = num(+(0.005 + s * 0.055).toFixed(5));
+  return `deband=1thr=${thr}:2thr=${thr}:3thr=${thr}:4thr=${thr}`;
 }
 
 /**
@@ -160,6 +181,31 @@ export function frameStackFilter(s: FrameStackSettings): string {
   const mid = (n - 1) / 2;
   const w = Array.from({ length: n }, (_, i) => num(mid - Math.abs(i - mid) + 1));
   return `tmix=frames=${n}:weights='${w.join(" ")}'`;
+}
+
+/**
+ * Deflicker filter: normalize luminance over a rolling window (arithmetic mean).
+ * Clamped to ffmpeg's supported 2..129 frame window.
+ */
+export function deflickerFilter(s: DeflickerSettings): string {
+  const size = Math.max(2, Math.min(129, Math.floor(s.size)));
+  return `deflicker=size=${size}:mode=am`;
+}
+
+/** Clamp a lighten-speedup factor to a sane integer (>= 2). */
+export function speedupFactor(s: LightenSpeedupSettings): number {
+  return Math.max(2, Math.floor(s.factor));
+}
+
+/**
+ * Lighten speed-up: `factor-1` chained `tblend=all_mode=lighten` build a sliding
+ * max over `factor` frames; `framestep=factor` keeps one per non-overlapping
+ * group; `setpts=PTS/factor` retimes the survivors so the clip actually plays
+ * `factor`x faster (framestep alone drops frames but keeps the original timing).
+ */
+export function lightenSpeedupFilter(factor: number): string {
+  const blends = Array(factor - 1).fill("tblend=all_mode=lighten").join(",");
+  return `${blends},framestep=${factor},setpts=PTS/${factor}`;
 }
 
 export function brightnessToGamma(brightness: number): number {
@@ -253,6 +299,13 @@ export function buildFfmpeg(p: TimelapseProject, opts: BuildOptions = {}): Built
   if (hasZoom(p.keyframes)) {
     throw new ZoomNotSupportedError();
   }
+  if (p.post.lightenSpeedup && p.post.starTrail) {
+    throw new Error(
+      "Lighten speed-up and star trails can't be combined — both are lighten " +
+        "stacks, but speed-up decimates frames while trails preserve them. " +
+        "Enable one or the other.",
+    );
+  }
   const preview = opts.preview;
 
   // window size is constant across keyframes (pan/move only)
@@ -283,9 +336,16 @@ export function buildFfmpeg(p: TimelapseProject, opts: BuildOptions = {}): Built
   // ahead of everything else, so the pan is applied after the blend (no pan
   // ghosting). Kept in previews — unlike denoise — so the effect is visible.
   const stack = p.post.frameStack ? frameStackFilter(p.post.frameStack) : null;
-  // Shared pre-crop prefix for the complex (star-trail) filtergraphs: stack, then
-  // denoise, applied before the stream is split. Empty when neither is active.
-  const preHead = [stack, denoise].filter(Boolean).join(",");
+  // Deflicker normalizes exposure per raw frame; it must run first, before any
+  // blending averages a flickering frame into its neighbours. Kept in previews.
+  const deflicker = p.post.deflicker ? deflickerFilter(p.post.deflicker) : null;
+  // Lighten speed-up: decimates by `speedup` and shortens the clip. Guarded above
+  // to be mutually exclusive with star trails, so it only appears on the simple
+  // (non-trail) path. Kept in previews so its motion effect is visible.
+  const speedup = p.post.lightenSpeedup ? speedupFactor(p.post.lightenSpeedup) : 0;
+  // Shared pre-crop prefix for the complex (star-trail) filtergraphs: deflicker,
+  // then stack, then denoise, applied before the stream is split. Empty if none.
+  const preHead = [deflicker, stack, denoise].filter(Boolean).join(",");
   const head = preHead ? `${preHead},` : "";
   const decayNum = trail ? Math.min(1, Math.max(0, trail.decay)) : 1;
   const decay = num(decayNum);
@@ -317,7 +377,8 @@ export function buildFfmpeg(p: TimelapseProject, opts: BuildOptions = {}): Built
   const delayedStart = !!trail && start > 0;
   const windDown = !!trail && end < N - 1; // frames remain after the trail -> retract
 
-  let outputFrames = N;
+  // Lighten speed-up drops the clip to 1/speedup its length (framestep=speedup).
+  let outputFrames = speedup ? Math.ceil(N / speedup) : N;
   const inputPattern = `${p.source.dir.replace(/\/$/, "")}/${p.source.glob}`;
 
   const codecArgs = preview
@@ -424,20 +485,34 @@ export function buildFfmpeg(p: TimelapseProject, opts: BuildOptions = {}): Built
     graphArgs = ["-filter_complex", filtergraph, "-map", "[outv]", "-r", String(p.output.fps)];
   } else {
     const parts: string[] = [];
-    if (stack) parts.push(stack); // pre-crop temporal noise reduction, first
+    if (deflicker) parts.push(deflicker); // exposure normalization, before any blend
+    if (stack) parts.push(stack); // pre-crop temporal noise reduction
+    // Lighten speed-up decimates here (pre-crop), so downstream the crop sees the
+    // shortened stream: map output frame n back to source frame speedup*n so the
+    // pan keeps tracking the same composition across the faster timeline.
+    if (speedup) parts.push(lightenSpeedupFilter(speedup));
     if (denoise && trail) parts.push(denoise); // before lagfun
     if (trail) parts.push(`lagfun=decay=${decay}`);
-    parts.push(windowCropScale("n"));
+    parts.push(windowCropScale(speedup ? `${speedup}*n` : "n"));
     if (denoise && !trail) parts.push(denoise); // after scale (cheaper)
     filtergraph = parts.join(",");
-    graphArgs = ["-vf", filtergraph];
+    // setpts retimes the decimated frames; -r locks the output to a constant rate
+    // (preview already carries -r in its codec args).
+    graphArgs = speedup && !preview
+      ? ["-vf", filtergraph, "-r", String(p.output.fps)]
+      : ["-vf", filtergraph];
   }
 
-  // Append the output tail (color grade, then fade) to the final output —
-  // before the [outv] label for complex graphs. Grade first so the fade dips
-  // the already-graded image to black, not the other way around.
+  // Append the output tail (color grade, deband, then fade) to the final output —
+  // before the [outv] label for complex graphs. Grade first so the fade dips the
+  // already-graded image to black; deband after grade so it smooths any banding
+  // the grade's tone-stretching introduced, before compression bakes it in.
   const grade = p.post.color ? gradeFilter(p.post.color) : "";
-  const tail = (grade ? `,${grade}` : "") + fadeSuffix(outputFrames);
+  const deband = p.post.deband ? debandFilter(p.post.deband) : "";
+  const tail =
+    (grade ? `,${grade}` : "") +
+    (deband ? `,${deband}` : "") +
+    fadeSuffix(outputFrames);
   if (tail) {
     filtergraph =
       graphArgs[0] === "-filter_complex"

@@ -29,12 +29,27 @@ body {
   gap: 18px;
 }
 
-/* scrollable list of accordion sections (left rail) */
-.sections {
+/* left rail: scrollable sections on top, pinned action bar at the bottom */
+.leftColumn {
+  display: flex;
+  flex-direction: column;
   flex: 0 0 500px;
+  min-height: 0;
+}
+
+/* scrollable list of accordion sections */
+.sections {
+  flex: 1 1 auto;
   overflow-y: auto;
   min-height: 0;
   padding-right: 4px;
+}
+
+/* always-visible render/preview actions, pinned below the sections */
+.actionBar {
+  flex: none;
+  border-top: 1px solid #2a2d35;
+  padding: 12px 4px 0 0;
 }
 
 /* preview occupies the right column, always visible */
@@ -52,11 +67,11 @@ body {
 }
 .preview-pane h2 { color: #8fb3e6; flex: none; }
 
-/* the stage (full frame + crop boxes) flexes to fill; canvas scales to fit */
+/* the stage (full frame + crop boxes) sizes to the image so the controls sit
+   directly beneath it; leftover vertical space falls to the bottom of the pane */
 .stageArea {
   position: relative;
-  flex: 1 1 auto;
-  min-height: 0;
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -85,9 +100,10 @@ body {
   font-size: 12px; color: #9aa0aa; text-transform: uppercase; letter-spacing: 0.05em;
 }
 .stageBar .muted { margin: 0; white-space: nowrap; }
+.stageHint { margin: 0 0 8px; }
 
 /* timeline */
-.timeline-wrap { flex: none; display: flex; align-items: center; gap: 10px; }
+.timeline-wrap { flex: none; display: flex; align-items: flex-start; gap: 10px; }
 .playBtn {
   flex: none; width: 34px; height: 34px; border-radius: 8px; padding: 0;
   display: flex; align-items: center; justify-content: center;
@@ -331,9 +347,6 @@ button.danger { background: #b3402f; border-color: #b3402f; }
   display: flex;
   align-items: center;
   gap: 10px;
-  border-top: 1px solid #2a2d35;
-  padding-top: 14px;
-  margin-top: 4px;
 }
 .actions .status { text-align: right; color: #9aa0aa; font-size: 13px; }
 

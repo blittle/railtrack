@@ -158,6 +158,9 @@ export default function App() {
   const [playing, setPlaying] = useState(false);
 
   // post
+  // Deflicker (exposure flicker removal)
+  const [deflickerOn, setDeflickerOn] = useState(false);
+  const [deflickerSize, setDeflickerSize] = useState(7);
   const [denoiseOn, setDenoiseOn] = useState(false);
   const [denoiseFilterName, setDenoiseFilterName] = useState<DenoiseFilter>("hqdn3d");
   const [denoiseStrength, setDenoiseStrength] = useState(0.5);
@@ -165,6 +168,12 @@ export default function App() {
   const [frameStackOn, setFrameStackOn] = useState(false);
   const [frameStackMode, setFrameStackMode] = useState<FrameStackMode>("median");
   const [frameStackFrames, setFrameStackFrames] = useState(3);
+  // Lighten speed-up (blend groups of frames, shorten the clip)
+  const [speedupOn, setSpeedupOn] = useState(false);
+  const [speedFactor, setSpeedFactor] = useState(2);
+  // Deband (smooth gradient banding)
+  const [debandOn, setDebandOn] = useState(false);
+  const [debandStrength, setDebandStrength] = useState(0.5);
   const [panSmooth, setPanSmooth] = useState(1); // export sub-pixel pan factor (1=off)
   const [fadeInSec, setFadeInSec] = useState(0);
   const [fadeOutSec, setFadeOutSec] = useState(0);
@@ -179,7 +188,7 @@ export default function App() {
   const [vibrance, setVibrance] = useState(0);
   const [saturation, setSaturation] = useState(1);
   const [starTrailOn, setStarTrailOn] = useState(false);
-  const [trailDecay, setTrailDecay] = useState(1.0);
+  const [trailDecay, setTrailDecay] = useState(0.99);
   const [trailStartFrac, setTrailStartFrac] = useState(0); // when trails begin
   const [trailEndFrac, setTrailEndFrac] = useState(1); // when trails retract (1 = end)
 
@@ -258,6 +267,9 @@ export default function App() {
       }
       if (typeof s.proxyBaseDir === "string") setProxyBaseDir(s.proxyBaseDir);
       if (typeof s.previewW === "number") setPreviewW(s.previewW);
+      // Apple Silicon acceleration is a per-machine preference, not per-project —
+      // persist it globally so it isn't reset every launch.
+      if (typeof s.hwAccel === "boolean") setHwAccel(s.hwAccel);
       const rebuild = s.rebuildEachSession === true;
       if (rebuild) setRebuildEachSession(true);
 
@@ -293,9 +305,9 @@ export default function App() {
     if (!settingsLoaded) return;
     localStorage.setItem(
       SETTINGS_KEY,
-      JSON.stringify({ ffmpegPath, ffprobePath, proxyBaseDir, previewW, rebuildEachSession }),
+      JSON.stringify({ ffmpegPath, ffprobePath, proxyBaseDir, previewW, rebuildEachSession, hwAccel }),
     );
-  }, [settingsLoaded, ffmpegPath, ffprobePath, proxyBaseDir, previewW, rebuildEachSession]);
+  }, [settingsLoaded, ffmpegPath, ffprobePath, proxyBaseDir, previewW, rebuildEachSession, hwAccel]);
 
   // Probe which VideoToolbox encoders the current ffmpeg supports (gates the
   // "Apple Silicon acceleration" checkbox). Re-runs whenever the binary changes.
@@ -431,9 +443,11 @@ export default function App() {
       hwAccel: hwAccel && vtEncoders.includes(VIDEOTOOLBOX_ENCODER[codec]),
       outputPath: outPath,
       keyframes,
+      deflicker: deflickerOn ? { size: deflickerSize } : undefined,
       frameStack: frameStackOn
         ? { frames: frameStackFrames, mode: frameStackMode }
         : undefined,
+      lightenSpeedup: speedupOn ? { factor: speedFactor } : undefined,
       denoise: denoiseOn
         ? { filter: denoiseFilterName, strength: denoiseStrength }
         : undefined,
@@ -453,7 +467,25 @@ export default function App() {
         vibrance,
         saturation,
       },
+      deband: debandOn ? { strength: debandStrength } : undefined,
     });
+  }
+
+  // Is any grade control off its neutral value? Drives the grade badge + reset.
+  const gradeActive =
+    exposure !== 0 || brightness !== 0 || contrast !== 1 || highlights !== 0 ||
+    shadows !== 0 || warmth !== 0 || tint !== 0 || vibrance !== 0 || saturation !== 1;
+
+  function resetGrade() {
+    setExposure(0);
+    setBrightness(0);
+    setContrast(1);
+    setHighlights(0);
+    setShadows(0);
+    setWarmth(0);
+    setTint(0);
+    setVibrance(0);
+    setSaturation(1);
   }
 
   function precheck(): string | null {
@@ -513,11 +545,20 @@ export default function App() {
     setStatus("");
     const bad = precheck();
     if (bad) return setError(bad);
-    if (!outputPath) return setError("Choose an output file.");
+
+    // No destination yet → pop the save dialog instead of erroring out, and use
+    // the picked path directly (state updates are async, can't rely on it here).
+    let outPath = outputPath;
+    if (!outPath) {
+      const picked = await pickSavePath("timelapse.mp4");
+      if (!picked) return; // user cancelled the dialog
+      outPath = picked;
+      setOutputPath(picked);
+    }
 
     let args: string[];
     try {
-      args = buildFfmpeg(currentProject(outputPath), { panSupersample: panSmooth }).args;
+      args = buildFfmpeg(currentProject(outPath), { panSupersample: panSmooth }).args;
     } catch (e) {
       return setError(String(e));
     }
@@ -527,7 +568,8 @@ export default function App() {
     setStatus("Rendering…");
     try {
       await runFfmpeg(ffmpegPath, args, frameCount);
-      setStatus("Done ✓");
+      setStatus("Done ✓ — opening…");
+      await openFile(outPath);
     } catch (e) {
       setError(String(e));
       setStatus("");
@@ -606,6 +648,7 @@ export default function App() {
       )}
 
       <div className="main">
+        <div className="leftColumn">
         <div className="sections">
           <Section title="1 · Source frames" open={openSection === "source"} onToggle={() => toggle("source")}>
             <div className="row">
@@ -621,11 +664,33 @@ export default function App() {
             )}
           </Section>
 
-          <Section title="2 · Star trails (lighten stack)" open={openSection === "trails"} onToggle={() => toggle("trails")}>
+          <Section title="2 · Motion & framing" open={openSection === "framing"} onToggle={() => toggle("framing")}>
+            <p className="muted">
+              Set the move by dragging the <b>Start</b> and <b>End</b> boxes on the preview, and
+              the framing tightness with the <b>Zoom</b> slider beneath it. The window glides from
+              Start to End across the clip.
+            </p>
+            <div className="field" style={{ marginTop: 10 }}>
+              <label>
+                Smooth pan on export
+                <span className="hint"> · supersamples to remove pan stutter (slower render)</span>
+              </label>
+              <select value={panSmooth} onChange={(e) => setPanSmooth(+e.target.value)}>
+                <option value={1}>Off</option>
+                <option value={2}>2× (smoother)</option>
+                <option value={4}>4× (smoothest, slowest)</option>
+              </select>
+            </div>
+          </Section>
+
+          <Section title="3 · Stacking & motion FX" open={openSection === "fx"} onToggle={() => toggle("fx")}>
             <label className="check">
               <input type="checkbox" checked={starTrailOn}
-                onChange={(e) => setStarTrailOn(e.target.checked)} />
-              Enable star trails
+                onChange={(e) => {
+                  setStarTrailOn(e.target.checked);
+                  if (e.target.checked) setSpeedupOn(false); // exclusive with lighten speed-up
+                }} />
+              Star trails <span className="hint">(lighten stack)</span>
             </label>
             {starTrailOn && (
               <>
@@ -644,9 +709,75 @@ export default function App() {
                 </p>
               </>
             )}
-          </Section>
-
-          <Section title="3 · Post-processing" open={openSection === "post"} onToggle={() => toggle("post")}>
+            <label className="check">
+              <input type="checkbox" checked={speedupOn}
+                onChange={(e) => {
+                  setSpeedupOn(e.target.checked);
+                  if (e.target.checked) setStarTrailOn(false); // exclusive with star trails
+                }} />
+              Lighten speed-up <span className="hint">(blend & shorten)</span>
+            </label>
+            {speedupOn && (
+              <>
+                <div className="field">
+                  <label>Factor</label>
+                  <select value={speedFactor}
+                    onChange={(e) => setSpeedFactor(+e.target.value)}>
+                    <option value={2}>2× (half length)</option>
+                    <option value={4}>4× (quarter length)</option>
+                  </select>
+                </div>
+                <p className="hint" style={{ fontSize: 12, margin: "2px 0 0" }}>
+                  Lighten-blends each group of {speedFactor} frames and shortens the clip
+                  to 1/{speedFactor}. Moving highlights (stars) fuse into trails; foreground
+                  motion smooths out. Doesn't reduce noise. Not combinable with star trails.
+                </p>
+              </>
+            )}
+            <label className="check">
+              <input type="checkbox" checked={frameStackOn}
+                onChange={(e) => setFrameStackOn(e.target.checked)} />
+              Frame stacking <span className="hint">(cross-frame noise reduction)</span>
+            </label>
+            {frameStackOn && (
+              <>
+                <div className="fieldGrid">
+                  <div className="field">
+                    <label>Mode</label>
+                    <select value={frameStackMode}
+                      onChange={(e) => setFrameStackMode(e.target.value as FrameStackMode)}>
+                      <option value="median">Median (rejects planes/satellites)</option>
+                      <option value="mean">Mean (gentle average)</option>
+                    </select>
+                  </div>
+                  <div className="field">
+                    <label>Window — {frameStackFrames} frames</label>
+                    <input type="range" min={2} max={15} step={1} value={frameStackFrames}
+                      onChange={(e) => setFrameStackFrames(+e.target.value)} />
+                  </div>
+                </div>
+                <p className="hint" style={{ fontSize: 12, margin: "2px 0 0" }}>
+                  Stacks each frame with its neighbours to cut noise. Wider windows are
+                  cleaner but soften/trail moving stars.
+                </p>
+              </>
+            )}
+            <label className="check">
+              <input type="checkbox" checked={deflickerOn}
+                onChange={(e) => setDeflickerOn(e.target.checked)} />
+              Deflicker <span className="hint">(remove exposure flicker)</span>
+            </label>
+            {deflickerOn && (
+              <div className="field">
+                <label>Window — {deflickerSize} frames</label>
+                <input type="range" min={2} max={31} step={1} value={deflickerSize}
+                  onChange={(e) => setDeflickerSize(+e.target.value)} />
+                <p className="hint" style={{ fontSize: 12, margin: "2px 0 0" }}>
+                  Normalizes each frame's brightness to its neighbours. Wider windows
+                  ride out slower exposure drift; narrower ones react faster.
+                </p>
+              </div>
+            )}
             <label className="check">
               <input type="checkbox" checked={denoiseOn}
                 onChange={(e) => setDenoiseOn(e.target.checked)} />
@@ -660,6 +791,7 @@ export default function App() {
                     onChange={(e) => setDenoiseFilterName(e.target.value as DenoiseFilter)}>
                     <option value="hqdn3d">hqdn3d (fast)</option>
                     <option value="fftdnoiz">fftdnoiz (quality)</option>
+                    <option value="nlmeans">nlmeans (best, slow)</option>
                   </select>
                 </div>
                 <div className="field">
@@ -670,55 +802,35 @@ export default function App() {
               </div>
             )}
             <label className="check">
-              <input type="checkbox" checked={frameStackOn}
-                onChange={(e) => setFrameStackOn(e.target.checked)} />
-              Frame stacking <span className="hint">(cross-frame noise reduction)</span>
+              <input type="checkbox" checked={debandOn}
+                onChange={(e) => setDebandOn(e.target.checked)} />
+              Deband <span className="hint">(smooth sky-gradient banding)</span>
             </label>
-            {frameStackOn && (
-              <div className="fieldGrid">
-                <div className="field">
-                  <label>Mode</label>
-                  <select value={frameStackMode}
-                    onChange={(e) => setFrameStackMode(e.target.value as FrameStackMode)}>
-                    <option value="median">Median (rejects planes/satellites)</option>
-                    <option value="mean">Mean (gentle average)</option>
-                  </select>
-                </div>
-                <div className="field">
-                  <label>Window — {frameStackFrames} frames</label>
-                  <input type="range" min={2} max={15} step={1} value={frameStackFrames}
-                    onChange={(e) => setFrameStackFrames(+e.target.value)} />
-                </div>
+            {debandOn && (
+              <div className="field">
+                <label>Strength — {debandStrength.toFixed(2)}</label>
+                <input type="range" min={0} max={1} step={0.05} value={debandStrength}
+                  onChange={(e) => setDebandStrength(+e.target.value)} />
+                <p className="hint" style={{ fontSize: 12, margin: "2px 0 0" }}>
+                  Smooths stepped gradients (runs after the grade). Higher strength
+                  clears more banding but can soften fine detail.
+                </p>
               </div>
             )}
-            {frameStackOn && (
-              <p className="hint" style={{ fontSize: 12, margin: "2px 0 0" }}>
-                Stacks each frame with its neighbours to cut noise. Wider windows are
-                cleaner but soften/trail moving stars.
-              </p>
-            )}
+          </Section>
+
+          <Section title="4 · Color grade" open={openSection === "look"} onToggle={() => toggle("look")}>
             <div className="colorGrade">
-              <div className="row" style={{ justifyContent: "space-between", margin: "2px 0 4px" }}>
-                <span className="hint" style={{ fontSize: 12 }}>Color</span>
-                {(exposure !== 0 || brightness !== 0 || contrast !== 1 || highlights !== 0 || shadows !== 0 ||
-                  warmth !== 0 || tint !== 0 || vibrance !== 0 || saturation !== 1) && (
-                  <button className="link" onClick={() => {
-                    setExposure(0);
-                    setBrightness(0);
-                    setContrast(1);
-                    setHighlights(0);
-                    setShadows(0);
-                    setWarmth(0);
-                    setTint(0);
-                    setVibrance(0);
-                    setSaturation(1);
-                  }}>
-                    reset
-                  </button>
+              <div className="row" style={{ alignItems: "center", minHeight: 20 }}>
+                <span className="hint" style={{ marginRight: "auto", fontSize: 12 }}>
+                  {gradeActive ? "active" : "neutral"}
+                </span>
+                {gradeActive && (
+                  <button className="link" onClick={resetGrade}>reset</button>
                 )}
               </div>
-              <div className="row" style={{ margin: "0 0 8px" }}>
-                <span className="hint" style={{ fontSize: 11 }}>Light</span>
+              <div className="row" style={{ margin: "8px 0 8px" }}>
+                <span className="hint" style={{ fontSize: 11 }}>Tone</span>
               </div>
               <div className="fieldGrid">
                 <div className="field">
@@ -773,20 +885,9 @@ export default function App() {
                 </div>
               </div>
             </div>
-            <div className="field" style={{ marginTop: 10 }}>
-              <label>
-                Smooth pan on export
-                <span className="hint"> · supersamples to remove pan stutter (slower render)</span>
-              </label>
-              <select value={panSmooth} onChange={(e) => setPanSmooth(+e.target.value)}>
-                <option value={1}>Off</option>
-                <option value={2}>2× (smoother)</option>
-                <option value={4}>4× (smoothest, slowest)</option>
-              </select>
-            </div>
           </Section>
 
-          <Section title="4 · Output &amp; render" open={openSection === "output"} onToggle={() => toggle("output")}>
+          <Section title="5 · Output &amp; render" open={openSection === "output"} onToggle={() => toggle("output")}>
             <div className="fieldGrid">
               <div className="field">
                 <label>Resolution</label>
@@ -824,22 +925,6 @@ export default function App() {
                 </div>
               )}
             </div>
-            {(() => {
-              const hwAvailable = vtEncoders.includes(VIDEOTOOLBOX_ENCODER[codec]);
-              return (
-                <label
-                  className={`check${hwAvailable ? "" : " disabled"}`}
-                  title={hwAvailable
-                    ? "Encode on Apple Silicon's hardware media engine (VideoToolbox) — much faster. Quality is driven by the CRF slider, mapped to VideoToolbox's constant-quality scale."
-                    : `This ffmpeg build has no ${VIDEOTOOLBOX_ENCODER[codec]} encoder, so hardware acceleration isn't available for ${codec.toUpperCase()}.`}>
-                  <input type="checkbox" checked={hwAccel && hwAvailable}
-                    disabled={!hwAvailable}
-                    onChange={(e) => setHwAccel(e.target.checked)} />
-                  Apple Silicon acceleration
-                  {!hwAvailable && <span className="hint">(not in this ffmpeg build)</span>}
-                </label>
-              );
-            })()}
 
             <div className="field">
               <label>Destination file</label>
@@ -848,36 +933,38 @@ export default function App() {
                 <span className="grow mono">{outputPath || "no file selected"}</span>
               </div>
             </div>
-
-            <div className="actions">
-              {!running ? (
-                <>
-                  <button className="primary" onClick={render}>Render</button>
-                  <button onClick={previewRender} title="Low-res preview of the whole timelapse. First run builds a one-time cache; later previews are fast.">
-                    ⚡ Preview render
-                  </button>
-                </>
-              ) : (
-                <button className="danger" onClick={cancel}>Cancel</button>
-              )}
-              <button onClick={showCommand} title="Show the ffmpeg command this will run">
-                ⌗ View command
-              </button>
-              <span className="grow status">{status}</span>
-            </div>
-
-            {running && (
-              <div className="progress">
-                <div className="bar" style={{ width: `${pct}%` }} />
-                <span className="pct">
-                  {pct}% · frame {progress?.frame ?? 0}/{frameCount}
-                  {progress?.speed ? ` · ${progress.speed}` : ""}
-                  {eta != null ? ` · ${fmtTime(eta)} left` : ""}
-                </span>
-              </div>
-            )}
-            {error && <pre className="error">{error}</pre>}
           </Section>
+        </div>
+
+        <div className="actionBar">
+          <div className="actions">
+            {!running ? (
+              <>
+                <button className="primary" onClick={render}>Render</button>
+                <button onClick={previewRender} title="Low-res preview of the whole timelapse. First run builds a one-time cache; later previews are fast.">
+                  ⚡ Preview render
+                </button>
+              </>
+            ) : (
+              <button className="danger" onClick={cancel}>Cancel</button>
+            )}
+            <button onClick={showCommand} title="Show the ffmpeg command this will run">
+              ⌗ View command
+            </button>
+            <span className="grow status">{status}</span>
+          </div>
+          {running && (
+            <div className="progress">
+              <div className="bar" style={{ width: `${pct}%` }} />
+              <span className="pct">
+                {pct}% · frame {progress?.frame ?? 0}/{frameCount}
+                {progress?.speed ? ` · ${progress.speed}` : ""}
+                {eta != null ? ` · ${fmtTime(eta)} left` : ""}
+              </span>
+            </div>
+          )}
+          {error && <pre className="error">{error}</pre>}
+        </div>
         </div>
 
         <section className="panel preview-pane">
@@ -894,11 +981,17 @@ export default function App() {
             grade={{ exposure, brightness, contrast, highlights, shadows, warmth, tint, vibrance, saturation }}
             onDragWindow={handleDragWindow}
           />
+          <p className="muted stageHint">Drag the Start / End boxes to set the pan</p>
           <div className="stageBar">
             <span className="zoomLabel">Zoom</span>
             <input type="range" min={0.3} max={1} step={0.01} value={zoom}
               disabled={!srcW} onChange={(e) => setZoom(+e.target.value)} className="grow" />
-            <span className="muted">drag the Start / End boxes to set the pan</span>
+            <button
+              disabled={!srcW || (endC.cx === startC.cx && endC.cy === startC.cy)}
+              onClick={() => setEndC(startC)}
+              title="Snap the End box onto the Start box (no pan — static framing)">
+              Reset pan
+            </button>
           </div>
           <Timeline
             frameCount={frameCount}
@@ -929,31 +1022,55 @@ export default function App() {
             </div>
 
             <h3>ffmpeg binaries</h3>
-            <div className="field">
-              <label>
-                ffmpeg path
-                <span className={ffmpegOk ? "ok" : "bad"}> · {ffmpegOk ? "✓ ready" : "not found"}</span>
-              </label>
-              <div className="row">
-                <input className="grow" placeholder="path to ffmpeg"
-                  value={ffmpegPath}
-                  onChange={(e) => setFfmpegPath(e.target.value)}
-                  onBlur={() => checkFfmpeg(ffmpegPath)} />
-                <button onClick={chooseFfmpeg}>Browse…</button>
+            <div className="fieldGrid">
+              <div className="field">
+                <label>
+                  ffmpeg path
+                  <span className={ffmpegOk ? "ok" : "bad"}> · {ffmpegOk ? "✓ ready" : "not found"}</span>
+                </label>
+                <div className="row">
+                  <input className="grow" placeholder="path to ffmpeg"
+                    value={ffmpegPath}
+                    onChange={(e) => setFfmpegPath(e.target.value)}
+                    onBlur={() => checkFfmpeg(ffmpegPath)} />
+                  <button onClick={chooseFfmpeg}>Browse…</button>
+                </div>
+                {!ffmpegOk && ffmpegErr && (
+                  <pre className="toolError">{ffmpegErr}</pre>
+                )}
               </div>
-              {!ffmpegOk && ffmpegErr && (
-                <pre className="toolError">{ffmpegErr}</pre>
-              )}
-            </div>
-            <div className="field">
-              <label>ffprobe path</label>
-              <div className="row">
-                <input className="grow" placeholder="path to ffprobe"
-                  value={ffprobePath}
-                  onChange={(e) => setFfprobePath(e.target.value)} />
-                <button onClick={chooseFfprobe}>Browse…</button>
+              <div className="field">
+                <label>ffprobe path</label>
+                <div className="row">
+                  <input className="grow" placeholder="path to ffprobe"
+                    value={ffprobePath}
+                    onChange={(e) => setFfprobePath(e.target.value)} />
+                  <button onClick={chooseFfprobe}>Browse…</button>
+                </div>
               </div>
             </div>
+
+            <h3>Encoding</h3>
+            {(() => {
+              const hwAvailable = vtEncoders.length > 0;
+              return (
+                <label
+                  className={`check${hwAvailable ? "" : " disabled"}`}
+                  title={hwAvailable
+                    ? "Encode on Apple Silicon's hardware media engine (VideoToolbox) — much faster. Quality is driven by the CRF slider, mapped to VideoToolbox's constant-quality scale. Applies to any codec whose VideoToolbox encoder this ffmpeg supports."
+                    : "This ffmpeg build has no VideoToolbox encoders, so hardware acceleration isn't available."}>
+                  <input type="checkbox" checked={hwAccel && hwAvailable}
+                    disabled={!hwAvailable}
+                    onChange={(e) => setHwAccel(e.target.checked)} />
+                  Apple Silicon acceleration
+                  {!hwAvailable && <span className="hint">(not in this ffmpeg build)</span>}
+                </label>
+              );
+            })()}
+            <p className="hint" style={{ fontSize: 12, margin: "2px 0 0" }}>
+              Falls back to software encoding automatically for any codec without a
+              VideoToolbox encoder in your ffmpeg build.
+            </p>
 
             <h3>Preview cache</h3>
             <div className="fieldGrid">

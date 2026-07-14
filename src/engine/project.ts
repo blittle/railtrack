@@ -49,12 +49,23 @@ export interface OutputSettings {
   scaleFlags: "lanczos" | "bicubic" | "bilinear";
 }
 
-export type DenoiseFilter = "hqdn3d" | "fftdnoiz";
+export type DenoiseFilter = "hqdn3d" | "fftdnoiz" | "nlmeans";
 
 export interface DenoiseSettings {
   filter: DenoiseFilter;
   /** 0..1 user-facing strength; mapped to filter-specific params at build time. */
   strength: number;
+}
+
+/**
+ * Deflicker: normalize each frame's luminance to a rolling average of its
+ * neighbours, removing the exposure flicker common in intervalometer timelapses
+ * (aperture/shutter variance, auto-exposure hunting). Runs first, on the raw
+ * frames, before any blending. Orthogonal to noise/motion filters.
+ */
+export interface DeflickerSettings {
+  /** Window size in frames to average brightness over (2..129). */
+  size: number;
 }
 
 export type FrameStackMode = "median" | "mean";
@@ -71,6 +82,18 @@ export interface FrameStackSettings {
   /** Window size in frames (2..15). Odd values give a symmetric-ish window. */
   frames: number;
   mode: FrameStackMode;
+}
+
+/**
+ * "Lighten speed-up": combine each non-overlapping group of `factor` consecutive
+ * frames with a lighten (max) blend and drop the clip to 1/factor its length.
+ * Moving bright elements (stars) fuse into connected trails; foreground motion
+ * (leaves, etc.) melts together. Does nothing for noise (max, not average).
+ * Runs pre-crop; mutually exclusive with [[StarTrailSettings]].
+ */
+export interface LightenSpeedupSettings {
+  /** How many frames collapse into one (2 = half length, 4 = quarter). */
+  factor: number;
 }
 
 export interface StarTrailSettings {
@@ -90,6 +113,16 @@ export interface StarTrailSettings {
    * back to points. Omitted / last frame = trails run to the end of the clip.
    */
   endFrame?: number;
+}
+
+/**
+ * Deband: smooth the stepped banding that shows up in smooth gradients (night
+ * skies especially), worsened by 8-bit output and lossy compression. Applied
+ * late — after the color grade, which can introduce banding by stretching tones.
+ */
+export interface DebandSettings {
+  /** 0..1 user-facing strength; mapped to deband's per-plane thresholds. */
+  strength: number;
 }
 
 export interface FadeSettings {
@@ -121,12 +154,18 @@ export interface ColorSettings {
 }
 
 export interface PostSettings {
+  /** Remove frame-to-frame exposure flicker (pre-crop, runs first). */
+  deflicker?: DeflickerSettings;
   denoise?: DenoiseSettings;
   /** Temporal noise reduction by stacking neighbouring frames (pre-crop). */
   frameStack?: FrameStackSettings;
+  /** Lighten-blend groups of frames and shorten the clip (pre-crop). */
+  lightenSpeedup?: LightenSpeedupSettings;
   starTrail?: StarTrailSettings;
   fade?: FadeSettings;
   color?: ColorSettings;
+  /** Smooth gradient banding (post-grade, pre-fade). */
+  deband?: DebandSettings;
 }
 
 export interface SourceInfo {

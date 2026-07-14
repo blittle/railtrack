@@ -91,6 +91,52 @@ describe("buildFfmpeg", () => {
     expect(prores).not.toContain("prores_ks");
   });
 
+  it("nlmeans is available as a denoise filter (strength maps to s)", () => {
+    expect(denoiseFilter({ filter: "nlmeans", strength: 0 })).toBe("nlmeans=s=1");
+    expect(denoiseFilter({ filter: "nlmeans", strength: 1 })).toBe("nlmeans=s=10");
+  });
+
+  it("deband runs after the grade and before the fade", () => {
+    const { filtergraph } = buildFfmpeg(
+      canonicalProject({
+        post: {
+          color: { brightness: 0.1, contrast: 1.2, temperature: 6500 },
+          deband: { strength: 0.5 },
+          fade: { inSec: 0, outSec: 1 },
+        },
+      }),
+    );
+    const g = filtergraph.indexOf("eq=");
+    const d = filtergraph.indexOf("deband=");
+    const f = filtergraph.indexOf("fade=t=out");
+    expect(g).toBeGreaterThanOrEqual(0);
+    expect(g).toBeLessThan(d); // grade before deband
+    expect(d).toBeLessThan(f); // deband before fade
+    expect(filtergraph).toContain("deband=1thr=0.0325:2thr=0.0325:3thr=0.0325:4thr=0.0325");
+  });
+
+  it("runs deflicker first in the pre-crop chain, before stack and crop", () => {
+    const { filtergraph } = buildFfmpeg(
+      canonicalProject({
+        post: {
+          deflicker: { size: 7 },
+          frameStack: { frames: 3, mode: "median" },
+        },
+      }),
+    );
+    expect(filtergraph.startsWith("deflicker=size=7:mode=am,")).toBe(true);
+    const df = filtergraph.indexOf("deflicker");
+    expect(df).toBeLessThan(filtergraph.indexOf("tmedian"));
+    expect(filtergraph.indexOf("tmedian")).toBeLessThan(filtergraph.indexOf("crop="));
+  });
+
+  it("clamps deflicker window to ffmpeg's 2..129 range", () => {
+    const { filtergraph } = buildFfmpeg(
+      canonicalProject({ post: { deflicker: { size: 999 } } }),
+    );
+    expect(filtergraph).toContain("deflicker=size=129:mode=am");
+  });
+
   it("inserts temporal frame stacking pre-crop (median rejects outliers)", () => {
     const { filtergraph } = buildFfmpeg(
       canonicalProject({ post: { frameStack: { frames: 5, mode: "median" } } }),
@@ -123,6 +169,42 @@ describe("buildFfmpeg", () => {
     expect(s).toBeGreaterThanOrEqual(0);
     expect(s).toBeLessThan(d);
     expect(d).toBeLessThan(l);
+  });
+
+  it("lighten speed-up decimates, retimes, and remaps the pan", () => {
+    const { filtergraph, args, outputFrames } = buildFfmpeg(
+      canonicalProject({ post: { lightenSpeedup: { factor: 4 } } }),
+    );
+    // factor-1 = 3 chained lighten blends, then framestep + setpts to speed up.
+    expect(filtergraph).toContain(
+      "tblend=all_mode=lighten,tblend=all_mode=lighten,tblend=all_mode=lighten,framestep=4,setpts=PTS/4",
+    );
+    // the blend/decimate runs BEFORE the crop
+    expect(filtergraph.indexOf("framestep=4")).toBeLessThan(filtergraph.indexOf("crop="));
+    // pan is evaluated against source frame = 4*n (output frame remapped)
+    expect(filtergraph).toContain("4*n");
+    // clip length drops to ceil(N/4); N=787 -> 197
+    expect(outputFrames).toBe(Math.ceil(787 / 4));
+    // constant output rate is locked for the retimed stream
+    expect(args).toContain("-r");
+  });
+
+  it("factor 2 uses a single lighten blend", () => {
+    const { filtergraph } = buildFfmpeg(
+      canonicalProject({ post: { lightenSpeedup: { factor: 2 } } }),
+    );
+    expect(filtergraph).toContain("tblend=all_mode=lighten,framestep=2,setpts=PTS/2");
+    expect(filtergraph).not.toContain("tblend=all_mode=lighten,tblend=all_mode=lighten");
+  });
+
+  it("rejects combining lighten speed-up with star trails", () => {
+    expect(() =>
+      buildFfmpeg(
+        canonicalProject({
+          post: { lightenSpeedup: { factor: 2 }, starTrail: { decay: 1 } },
+        }),
+      ),
+    ).toThrow(/can't be combined/);
   });
 
   it("appends color grade (eq gamma + colortemperature) before any fade", () => {

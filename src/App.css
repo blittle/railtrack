@@ -136,7 +136,20 @@ body {
 }
 .tl-handle-fade::after { background: #e6c878; }
 .tl-handle-trail::after { background: #57c878; }
+.tl-handle-speed::after { background: #6ea2ff; }
 .tl-handle:hover::after { left: 4px; width: 4px; }
+.tl-speed {
+  position: absolute; top: 0; bottom: 0;
+  background: rgba(110, 162, 255, 0.16);
+  border-left: 2px solid #6ea2ff; border-right: 2px solid #6ea2ff;
+  pointer-events: none;
+  display: flex; align-items: center; justify-content: center;
+}
+.tl-speed-badge {
+  font-size: 11px; font-weight: 600; color: #cfe0ff;
+  background: rgba(20, 24, 34, 0.7); border-radius: 4px; padding: 1px 5px;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
 .tl-playhead {
   position: absolute; top: -1px; bottom: -1px; width: 2px; margin-left: -1px;
   background: #fff; pointer-events: none; box-shadow: 0 0 5px rgba(255, 255, 255, 0.7); z-index: 3;
@@ -145,6 +158,12 @@ body {
   display: flex; justify-content: space-between; font-size: 11px; margin: 3px 2px 0;
   font-variant-numeric: tabular-nums;
 }
+.tl-legend { display: flex; gap: 14px; font-size: 11px; margin: 5px 2px 0; }
+.tl-leg { display: inline-flex; align-items: center; gap: 5px; }
+.tl-legend .sw { width: 10px; height: 10px; border-radius: 2px; }
+.sw-fade { background: #e6c878; }
+.sw-trail { background: #57c878; }
+.sw-speed { background: #6ea2ff; }
 .previewHint.stageLoading {
   inset: auto 8px 8px auto;
   width: auto; height: auto;

@@ -16,6 +16,15 @@ import type {
   TimelapseProject,
 } from "./engine/project";
 
+/** UI form of the speed ramp: peak multiplier + the two marker positions (0..1). */
+export interface SpeedRampUi {
+  peak: number;
+  upFrac: number;
+  downFrac: number;
+  /** Easing smoothness of the ramps: 0 = linear, 1 = full smoothstep. */
+  ease: number;
+}
+
 export interface UiSettings {
   sourceDir: string;
   glob: string;
@@ -39,6 +48,8 @@ export interface UiSettings {
   denoise?: DenoiseSettings;
   frameStack?: FrameStackSettings;
   lightenSpeedup?: LightenSpeedupSettings;
+  /** Ease-in / hold / ease-out speed ramp (preset form). */
+  speedRamp?: SpeedRampUi;
   starTrail?: StarTrailSettings;
   /** When trails begin, as a fraction of the timeline (0 = from start). */
   trailStartFrac?: number;
@@ -51,6 +62,26 @@ export interface UiSettings {
   color?: ColorSettings;
   /** Gradient debanding (post-grade). */
   deband?: DebandSettings;
+}
+
+/**
+ * Turn the ease-in / hold / ease-out preset into speed keyframes: 1× at both
+ * ends, easing up to `peak` over [start, upFrame] and back down over
+ * [downFrame, end], holding `peak` in between.
+ */
+function speedRampKeyframes(r: SpeedRampUi, lastFrame: number) {
+  const up = Math.round(Math.min(1, Math.max(0, r.upFrac)) * lastFrame);
+  const down = Math.round(Math.min(1, Math.max(0, r.downFrac)) * lastFrame);
+  const peak = Math.max(1, r.peak);
+  const ease = Math.min(1, Math.max(0, r.ease));
+  return {
+    keyframes: [
+      { frame: 0, speed: 1, easing: "linear" as const },
+      { frame: up, speed: peak, easing: "easeInOut" as const, easeAmount: ease },
+      { frame: Math.max(up, down), speed: peak, easing: "linear" as const },
+      { frame: lastFrame, speed: 1, easing: "easeInOut" as const, easeAmount: ease },
+    ],
+  };
 }
 
 function neutralColor(c?: ColorSettings): boolean {
@@ -95,6 +126,7 @@ export function projectFromUi(s: UiSettings): TimelapseProject {
       ...(s.denoise ? { denoise: s.denoise } : {}),
       ...(s.frameStack ? { frameStack: s.frameStack } : {}),
       ...(s.lightenSpeedup ? { lightenSpeedup: s.lightenSpeedup } : {}),
+      ...(s.speedRamp ? { speedRamp: speedRampKeyframes(s.speedRamp, lastFrame) } : {}),
       ...(s.starTrail
         ? {
             starTrail: {

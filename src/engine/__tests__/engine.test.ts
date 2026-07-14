@@ -1,10 +1,11 @@
 import { describe, it, expect } from "vitest";
-import type { TimelapseProject } from "../project";
+import type { SpeedKeyframe, TimelapseProject } from "../project";
 import {
   buildFfmpeg,
   buildProxyCommand,
   brightnessToGamma,
   denoiseFilter,
+  speedAtFrame,
   ZoomNotSupportedError,
 } from "../buildFfmpeg";
 import { windowAtFrame, hasZoom, ease } from "../interpolate";
@@ -207,6 +208,70 @@ describe("buildFfmpeg", () => {
     ).toThrow(/can't be combined/);
   });
 
+  it("speed keyframe easeAmount blends linear <-> smoothstep", () => {
+    const lin: SpeedKeyframe[] = [
+      { frame: 0, speed: 1, easing: "linear" },
+      { frame: 10, speed: 3, easing: "easeInOut", easeAmount: 0 },
+    ];
+    const smooth: SpeedKeyframe[] = [
+      { frame: 0, speed: 1, easing: "linear" },
+      { frame: 10, speed: 3, easing: "easeInOut", easeAmount: 1 },
+    ];
+    // at u=0.25: linear -> 1.5, full smoothstep -> 1.3125
+    expect(speedAtFrame(lin, 2.5)).toBeCloseTo(1.5, 5);
+    expect(speedAtFrame(smooth, 2.5)).toBeCloseTo(1.3125, 4);
+  });
+
+  it("speed ramp retimes at the very end and shortens the clip", () => {
+    const kf = (frame: number, speed: number): { frame: number; speed: number; easing: "linear" } =>
+      ({ frame, speed, easing: "linear" });
+    const { args, filtergraph, outputFrames } = buildFfmpeg(
+      canonicalProject({ post: { speedRamp: { keyframes: [kf(0, 2), kf(786, 2)] } } }),
+    );
+    // constant 2× over N=787 frames -> ~394 output frames
+    expect(outputFrames).toBe(394);
+    // the retime is the LAST thing in the -vf chain (after crop/scale)
+    expect(filtergraph).toMatch(/setpts=.*,fps=30$/);
+    expect(filtergraph.indexOf("crop=")).toBeLessThan(filtergraph.indexOf("setpts="));
+    // constant output rate is locked
+    expect(args).toContain("-r");
+  });
+
+  it("speed ramp comes after the grade + fade tail, not before", () => {
+    const kf = (frame: number, speed: number): { frame: number; speed: number; easing: "linear" } =>
+      ({ frame, speed, easing: "linear" });
+    const { filtergraph } = buildFfmpeg(
+      canonicalProject({
+        post: {
+          color: { brightness: 0.1, contrast: 1.2, temperature: 6500 },
+          fade: { inSec: 0, outSec: 1 },
+          speedRamp: { keyframes: [kf(0, 3), kf(786, 3)] },
+        },
+      }),
+    );
+    expect(filtergraph.indexOf("eq=")).toBeLessThan(filtergraph.indexOf("setpts="));
+    expect(filtergraph.indexOf("fade=t=out")).toBeLessThan(filtergraph.indexOf("setpts="));
+  });
+
+  it("a 1x->fast->1x ramp lands between full-speed and top-speed length", () => {
+    const { outputFrames } = buildFfmpeg(
+      canonicalProject({
+        post: {
+          speedRamp: {
+            keyframes: [
+              { frame: 0, speed: 1, easing: "linear" },
+              { frame: 393, speed: 4, easing: "easeInOut" },
+              { frame: 786, speed: 1, easing: "easeInOut" },
+            ],
+          },
+        },
+      }),
+    );
+    // shorter than 1x (787) but longer than a uniform 4x (~197)
+    expect(outputFrames).toBeLessThan(787);
+    expect(outputFrames).toBeGreaterThan(197);
+  });
+
   it("appends color grade (eq gamma + colortemperature) before any fade", () => {
     const { filtergraph } = buildFfmpeg(
       canonicalProject({
@@ -404,12 +469,29 @@ describe("buildFfmpeg", () => {
     expect(filtergraph.startsWith("lagfun=decay=1,")).toBe(true);
   });
 
-  it("rejects animated zoom (differing window size)", () => {
+  it("renders animated zoom via a bounding crop + zoompan (single sub-pixel sample)", () => {
     const p = canonicalProject({
       keyframes: [
         { frame: 0, x: 0, y: 944, w: 7752, h: 4360, easing: "linear" },
-        { frame: 786, x: 200, y: 944, w: 5000, h: 2812, easing: "linear" },
+        { frame: 786, x: 1376, y: 1724, w: 5000, h: 2812, easing: "linear" },
       ],
+    });
+    const { filtergraph } = buildFfmpeg(p);
+    // constant bounding crop (union of the windows), then zoompan to the output
+    expect(filtergraph).toContain("crop=7752:4360:0:944");
+    expect(filtergraph).toContain("zoompan=");
+    expect(filtergraph).toContain("s=3840x2160");
+    // zoom expressions are parameterized on the output frame index `on`
+    expect(filtergraph).toContain("on");
+  });
+
+  it("still rejects zoom combined with star trails", () => {
+    const p = canonicalProject({
+      keyframes: [
+        { frame: 0, x: 0, y: 944, w: 7752, h: 4360, easing: "linear" },
+        { frame: 786, x: 1376, y: 1724, w: 5000, h: 2812, easing: "linear" },
+      ],
+      post: { starTrail: { decay: 1 } },
     });
     expect(() => buildFfmpeg(p)).toThrow(ZoomNotSupportedError);
   });

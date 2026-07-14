@@ -16,6 +16,12 @@ interface Props {
   trailEndFrac: number;
   onTrailStart: (frac: number) => void;
   onTrailEnd: (frac: number) => void;
+  speedRamp: boolean;
+  speedPeak: number;
+  rampUpFrac: number;
+  rampDownFrac: number;
+  onRampUp: (frac: number) => void;
+  onRampDown: (frac: number) => void;
 }
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
@@ -66,6 +72,12 @@ export default function Timeline(p: Props) {
               { key: "te", frac: p.trailEndFrac, cls: "trail", onFrac: (f: number) => p.onTrailEnd(Math.max(f, p.trailStartFrac)), title: "Trails end" },
             ]
           : []),
+        ...(p.speedRamp
+          ? [
+              { key: "su", frac: p.rampUpFrac, cls: "speed", onFrac: (f: number) => p.onRampUp(Math.min(f, p.rampDownFrac)), title: "Ramp up to peak speed by here" },
+              { key: "sd", frac: p.rampDownFrac, cls: "speed", onFrac: (f: number) => p.onRampDown(Math.max(f, p.rampUpFrac)), title: "Start ramping down from peak here" },
+            ]
+          : []),
       ]
     : [];
 
@@ -88,6 +100,17 @@ export default function Timeline(p: Props) {
               }}
             />
           )}
+          {p.speedRamp && (
+            <div
+              className="tl-speed"
+              style={{
+                left: `${p.rampUpFrac * 100}%`,
+                width: `${Math.max(0, p.rampDownFrac - p.rampUpFrac) * 100}%`,
+              }}
+            >
+              <span className="tl-speed-badge">{p.speedPeak}×</span>
+            </div>
+          )}
           {handles.map((h) => (
             <div
               key={h.key}
@@ -103,6 +126,13 @@ export default function Timeline(p: Props) {
           <span>frame {enabled ? index + 1 : 0}/{p.frameCount || 0}</span>
           <span>{fmt(p.playhead, durS)} / {fmt(1, durS)}</span>
         </div>
+        {(p.starTrail || p.speedRamp) && (
+          <div className="tl-legend muted">
+            <span className="tl-leg"><i className="sw sw-fade" /> Fade</span>
+            {p.starTrail && <span className="tl-leg"><i className="sw sw-trail" /> Trails</span>}
+            {p.speedRamp && <span className="tl-leg"><i className="sw sw-speed" /> Speed</span>}
+          </div>
+        )}
       </div>
     </div>
   );

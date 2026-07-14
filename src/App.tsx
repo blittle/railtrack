@@ -23,7 +23,7 @@ import { projectFromUi } from "./projectFromUi";
 import { brightnessToGamma, buildFfmpeg, buildProxyCommand } from "./engine/buildFfmpeg";
 import { VIDEOTOOLBOX_ENCODER } from "./engine/project";
 import type { Codec, DenoiseFilter, FrameStackMode, Keyframe, TimelapseProject } from "./engine/project";
-import { windowRect, centerFromXY } from "./cropMath";
+import { windowRect, centerFromXY, maxFitSize } from "./cropMath";
 import Stage from "./Stage";
 import Timeline from "./Timeline";
 import "./App.css";
@@ -151,7 +151,10 @@ export default function App() {
 
   // crop windows (the visual editor) — two keyframes' worth of framing.
   // zoom = window size as a fraction of the max-fit; centers are 0..1 of source.
-  const [zoom, setZoom] = useState(0.85);
+  // Per-box zoom lets the Start/End windows differ in size (an animated zoom);
+  // the Zoom slider sets both at once, corner handles resize one independently.
+  const [startZoom, setStartZoom] = useState(0.85);
+  const [endZoom, setEndZoom] = useState(0.85);
   const [startC, setStartC] = useState({ cx: 0.45, cy: 0.5 });
   const [endC, setEndC] = useState({ cx: 0.55, cy: 0.5 });
   const [playhead, setPlayhead] = useState(0); // 0..1 timeline position
@@ -171,6 +174,12 @@ export default function App() {
   // Lighten speed-up (blend groups of frames, shorten the clip)
   const [speedupOn, setSpeedupOn] = useState(false);
   const [speedFactor, setSpeedFactor] = useState(2);
+  // Speed ramp (ease-in / hold / ease-out over the timeline)
+  const [speedRampOn, setSpeedRampOn] = useState(false);
+  const [speedPeak, setSpeedPeak] = useState(4); // peak playback multiplier
+  const [rampUpFrac, setRampUpFrac] = useState(0.3);   // reach peak by here
+  const [rampDownFrac, setRampDownFrac] = useState(0.7); // leave peak here
+  const [rampEase, setRampEase] = useState(1); // 0 = linear, 1 = full smoothstep
   // Deband (smooth gradient banding)
   const [debandOn, setDebandOn] = useState(false);
   const [debandStrength, setDebandStrength] = useState(0.5);
@@ -207,12 +216,12 @@ export default function App() {
   // The two crop windows (source px) derived from zoom + centers + output aspect.
   const outAspect = outW / outH;
   const startWin = useMemo(
-    () => windowRect(srcW, srcH, outAspect, zoom, startC.cx, startC.cy),
-    [srcW, srcH, outAspect, zoom, startC],
+    () => windowRect(srcW, srcH, outAspect, startZoom, startC.cx, startC.cy),
+    [srcW, srcH, outAspect, startZoom, startC],
   );
   const endWin = useMemo(
-    () => windowRect(srcW, srcH, outAspect, zoom, endC.cx, endC.cy),
-    [srcW, srcH, outAspect, zoom, endC],
+    () => windowRect(srcW, srcH, outAspect, endZoom, endC.cx, endC.cy),
+    [srcW, srcH, outAspect, endZoom, endC],
   );
   const keyframes = useMemo<Keyframe[]>(() => {
     if (!frameCount || !srcW) return [];
@@ -225,9 +234,20 @@ export default function App() {
 
   // Dragging a crop box on the Stage updates that endpoint's fractional center.
   function handleDragWindow(which: "start" | "end", x: number, y: number) {
-    const c = centerFromXY(x, y, startWin.w, startWin.h, srcW, srcH);
+    const win = which === "start" ? startWin : endWin;
+    const c = centerFromXY(x, y, win.w, win.h, srcW, srcH);
     if (which === "start") setStartC(c);
     else setEndC(c);
+  }
+
+  // Dragging a corner handle resizes that window (a new width in source px), which
+  // maps back to a per-box zoom fraction. Differing sizes = an animated zoom.
+  function handleResizeWindow(which: "start" | "end", widthSrc: number) {
+    const max = maxFitSize(srcW, srcH, outAspect);
+    if (max.w <= 0) return;
+    const z = Math.max(0.1, Math.min(1, widthSrc / max.w));
+    if (which === "start") setStartZoom(z);
+    else setEndZoom(z);
   }
 
   // Animate the playhead when playing (sweeps the clip in ~6s, looping).
@@ -391,7 +411,8 @@ export default function App() {
       setSrcH(r.height);
       setGlob(r.glob);
       // reset the editor framing for the new source
-      setZoom(0.85);
+      setStartZoom(0.85);
+      setEndZoom(0.85);
       setStartC({ cx: 0.45, cy: 0.5 });
       setEndC({ cx: 0.55, cy: 0.5 });
       setPlayhead(0);
@@ -448,6 +469,9 @@ export default function App() {
         ? { frames: frameStackFrames, mode: frameStackMode }
         : undefined,
       lightenSpeedup: speedupOn ? { factor: speedFactor } : undefined,
+      speedRamp: speedRampOn
+        ? { peak: speedPeak, upFrac: rampUpFrac, downFrac: rampDownFrac, ease: rampEase }
+        : undefined,
       denoise: denoiseOn
         ? { filter: denoiseFilterName, strength: denoiseStrength }
         : undefined,
@@ -681,6 +705,36 @@ export default function App() {
                 <option value={4}>4× (smoothest, slowest)</option>
               </select>
             </div>
+            <label className="check">
+              <input type="checkbox" checked={speedRampOn}
+                onChange={(e) => setSpeedRampOn(e.target.checked)} />
+              Speed ramp <span className="hint">(ease up to a peak speed, then back down)</span>
+            </label>
+            {speedRampOn && (
+              <>
+                <div className="fieldGrid">
+                  <div className="field">
+                    <label>Peak speed — {speedPeak}×</label>
+                    <input type="range" min={1} max={16} step={1} value={speedPeak}
+                      onChange={(e) => setSpeedPeak(+e.target.value)} />
+                  </div>
+                  <div className="field">
+                    <label>
+                      Easing — {Math.round(rampEase * 100)}%
+                      <span className="hint"> · {rampEase === 0 ? "linear" : rampEase >= 1 ? "smooth" : "eased"}</span>
+                    </label>
+                    <input type="range" min={0} max={1} step={0.05} value={rampEase}
+                      onChange={(e) => setRampEase(+e.target.value)} />
+                  </div>
+                </div>
+                <p className="hint" style={{ fontSize: 12, margin: "2px 0 0" }}>
+                  Plays at 1× at the ends and eases up to {speedPeak}× in between. Drag the two
+                  blue <b>markers on the timeline</b> to set where it reaches and leaves peak speed.
+                  Easing controls how gradual the ramps are (0% = linear, 100% = smooth). Shortens
+                  the clip (faster-only, so frames are dropped, not blended).
+                </p>
+              </>
+            )}
           </Section>
 
           <Section title="3 · Stacking & motion FX" open={openSection === "fx"} onToggle={() => toggle("fx")}>
@@ -980,17 +1034,23 @@ export default function App() {
             playhead={playhead}
             grade={{ exposure, brightness, contrast, highlights, shadows, warmth, tint, vibrance, saturation }}
             onDragWindow={handleDragWindow}
+            onResizeWindow={handleResizeWindow}
           />
-          <p className="muted stageHint">Drag the Start / End boxes to set the pan</p>
+          <p className="muted stageHint">
+            Drag the boxes to pan · drag a corner to resize (Start ≠ End size = zoom)
+          </p>
           <div className="stageBar">
             <span className="zoomLabel">Zoom</span>
-            <input type="range" min={0.3} max={1} step={0.01} value={zoom}
-              disabled={!srcW} onChange={(e) => setZoom(+e.target.value)} className="grow" />
+            <input type="range" min={0.3} max={1} step={0.01} value={startZoom}
+              disabled={!srcW}
+              onChange={(e) => { const v = +e.target.value; setStartZoom(v); setEndZoom(v); }}
+              className="grow" />
+            {startZoom !== endZoom && <span className="hint">zoom</span>}
             <button
-              disabled={!srcW || (endC.cx === startC.cx && endC.cy === startC.cy)}
-              onClick={() => setEndC(startC)}
-              title="Snap the End box onto the Start box (no pan — static framing)">
-              Reset pan
+              disabled={!srcW || (endC.cx === startC.cx && endC.cy === startC.cy && startZoom === endZoom)}
+              onClick={() => { setEndC(startC); setEndZoom(startZoom); }}
+              title="Snap the End box onto the Start box (no pan, no zoom — static framing)">
+              Reset
             </button>
           </div>
           <Timeline
@@ -1009,6 +1069,12 @@ export default function App() {
             trailEndFrac={trailEndFrac}
             onTrailStart={setTrailStartFrac}
             onTrailEnd={setTrailEndFrac}
+            speedRamp={speedRampOn}
+            speedPeak={speedPeak}
+            rampUpFrac={rampUpFrac}
+            rampDownFrac={rampDownFrac}
+            onRampUp={setRampUpFrac}
+            onRampDown={setRampDownFrac}
           />
         </section>
       </div>

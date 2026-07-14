@@ -15,19 +15,19 @@ import type {
   Keyframe,
   LightenSpeedupSettings,
   OutputSettings,
+  SpeedKeyframe,
   TimelapseProject,
 } from "./project";
 import { VIDEOTOOLBOX_ENCODER } from "./project";
 import { hasZoom } from "./interpolate";
 
 export class ZoomNotSupportedError extends Error {
-  constructor() {
-    super(
-      "Animated zoom (keyframes with differing w/h) is not supported by the " +
-        "crop-expression path. ffmpeg's crop filter fixes w/h at config time; " +
-        "zoom requires the zoompan path (planned). For now keep window size " +
-        "constant across keyframes (pan/move only).",
-    );
+  constructor(
+    message = "Animated zoom isn't supported yet in this combination. For now, " +
+      "keep the window size constant (pan/move only) when using star trails or " +
+      "lighten speed-up.",
+  ) {
+    super(message);
     this.name = "ZoomNotSupportedError";
   }
 }
@@ -208,6 +208,87 @@ export function lightenSpeedupFilter(factor: number): string {
   return `${blends},framestep=${factor},setpts=PTS/${factor}`;
 }
 
+/** Eased playback speed at frame index `f`, holding the endpoints outside range. */
+export function speedAtFrame(kfs: SpeedKeyframe[], f: number): number {
+  const k = [...kfs].sort((a, b) => a.frame - b.frame);
+  if (f <= k[0].frame) return k[0].speed;
+  const last = k[k.length - 1];
+  if (f >= last.frame) return last.speed;
+  for (let i = 0; i < k.length - 1; i++) {
+    const a = k[i];
+    const b = k[i + 1];
+    if (f >= a.frame && f <= b.frame) {
+      const span = b.frame - a.frame;
+      if (span <= 0) return b.speed;
+      const u = (f - a.frame) / span;
+      let e = u;
+      if (b.easing === "easeInOut") {
+        const amt = b.easeAmount ?? 1; // 0 = linear, 1 = full smoothstep
+        e = u * (1 - amt) + u * u * (3 - 2 * u) * amt;
+      }
+      return a.speed + (b.speed - a.speed) * e;
+    }
+  }
+  return last.speed;
+}
+
+/**
+ * Build the end-of-pipeline speed-ramp filter chain for a FINISHED stream of
+ * `frames` frames at `fps`. Keyframes' `frame` values index that stream.
+ *
+ * Model: each stream frame i plays for 1/speed(i) of an output frame, so its
+ * output time is out(i) = ∫₀ⁱ 1/speed. We integrate that numerically at a set of
+ * breakpoints (keyframes, plus sub-samples across eased segments) and emit a
+ * piecewise-linear `out(N)` as `setpts`, then `fps` resamples to a constant rate
+ * (dropping frames where speed > 1). Commas inside the expression are escaped so
+ * the filtergraph parser keeps them inside setpts.
+ */
+export function speedRampChain(
+  kfs: SpeedKeyframe[],
+  frames: number,
+  fps: number,
+): { chain: string; outputFrames: number } {
+  const k = [...kfs].sort((a, b) => a.frame - b.frame);
+
+  // Breakpoints: 0, every keyframe, the last frame, plus sub-samples on eased
+  // segments (where 1/speed curves) so the piecewise-linear fit stays smooth.
+  const bpsRaw: number[] = [0, frames - 1];
+  for (let i = 0; i < k.length; i++) {
+    bpsRaw.push(Math.max(0, Math.min(frames - 1, k[i].frame)));
+    if (i > 0 && k[i].easing === "easeInOut") {
+      const a = k[i - 1].frame;
+      const b = k[i].frame;
+      for (let s = 1; s < 8; s++) bpsRaw.push(a + ((b - a) * s) / 8);
+    }
+  }
+  const B = [...new Set(bpsRaw.map((v) => Math.max(0, Math.min(frames - 1, v))))]
+    .sort((a, b) => a - b);
+
+  // Cumulative output time (in output frames) at each breakpoint, trapezoidal.
+  const out: number[] = [0];
+  for (let i = 1; i < B.length; i++) {
+    const di = B[i] - B[i - 1];
+    const inv0 = 1 / Math.max(1e-6, speedAtFrame(k, B[i - 1]));
+    const inv1 = 1 / Math.max(1e-6, speedAtFrame(k, B[i]));
+    out.push(out[i - 1] + (di * (inv0 + inv1)) / 2);
+  }
+
+  // Piecewise-linear out(N): hold the last value past the final breakpoint.
+  let expr = num(out[out.length - 1]);
+  for (let i = B.length - 2; i >= 0; i--) {
+    const x0 = B[i];
+    const x1 = B[i + 1];
+    const slope = x1 > x0 ? (out[i + 1] - out[i]) / (x1 - x0) : 0;
+    const seg = `${num(out[i])}+(${num(slope)})*(N-${num(x0)})`;
+    expr = `if(lt(N,${num(x1)}),${seg},${expr})`;
+  }
+
+  // setpts wants PTS in timebase units: out(N) frames / fps = seconds, / TB.
+  const chain = `setpts=(${escapeExpr(expr)})/${num(fps)}/TB,fps=${num(fps)}`;
+  const outputFrames = Math.max(1, Math.round(out[out.length - 1]) + 1);
+  return { chain, outputFrames };
+}
+
 export function brightnessToGamma(brightness: number): number {
   return Math.max(0.1, Math.min(10, 1 + brightness));
 }
@@ -296,7 +377,11 @@ export function buildFfmpeg(p: TimelapseProject, opts: BuildOptions = {}): Built
   if (p.keyframes.length < 2) {
     throw new Error("buildFfmpeg: need at least 2 keyframes");
   }
-  if (hasZoom(p.keyframes)) {
+  // Animated zoom (windows differing in size) is supported on the plain pan path,
+  // but not yet alongside the frame-count-rewriting effects (star trails /
+  // lighten speed-up), whose crop math assumes a constant window size.
+  const zoom = hasZoom(p.keyframes);
+  if (zoom && (p.post.starTrail || p.post.lightenSpeedup)) {
     throw new ZoomNotSupportedError();
   }
   if (p.post.lightenSpeedup && p.post.starTrail) {
@@ -364,6 +449,40 @@ export function buildFfmpeg(p: TimelapseProject, opts: BuildOptions = {}): Built
       `scale=iw*${ss}:ih:flags=bilinear,` +
       `crop=${cw * ss}:${ch}:${xe}:${ye},` +
       `${scaleFilter}`
+    );
+  };
+
+  // Animated zoom: `crop` can't vary its size per frame, so we use `zoompan`,
+  // which does a single sub-pixel affine sample per frame (pan + zoom together).
+  // A separate scale+crop double-quantizes (scale size AND crop position both
+  // snap to integers each frame) and visibly jitters; zoompan doesn't. First crop
+  // a CONSTANT bounding box — the union of the keyframe windows, expanded to the
+  // output aspect so zoompan doesn't distort — then pan+zoom within it. zoompan
+  // evaluates its expressions against `on` (the output frame index).
+  const zoomCropScale = (): string => {
+    const bl = Math.min(...p.keyframes.map((k) => k.x));
+    const bt = Math.min(...p.keyframes.map((k) => k.y));
+    const br = Math.max(...p.keyframes.map((k) => k.x + k.w));
+    const bb = Math.max(...p.keyframes.map((k) => k.y + k.h));
+    let bw = br - bl;
+    let bh = bb - bt;
+    if (bw / bh < ow / oh) bw = (bh * ow) / oh;
+    else bh = (bw * oh) / ow;
+    bw = Math.min(evenFloor(bw), evenFloor(p.source.width));
+    bh = Math.min(evenFloor(bh), evenFloor(p.source.height));
+    const ux = (bl + br) / 2;
+    const uy = (bt + bb) / 2;
+    const bx = evenFloor(Math.max(0, Math.min(p.source.width - bw, ux - bw / 2)));
+    const by = evenFloor(Math.max(0, Math.min(p.source.height - bh, uy - bh / 2)));
+    // z = boundingWidth / windowWidth (always >= 1); x/y = window top-left in the
+    // bounding box's local coords. The region shown is width/z = the window.
+    const w = buildExpr(p.keyframes, (k) => k.w, "on");
+    const z = escapeExpr(`${bw}/(${w})`);
+    const zx = escapeExpr(`(${buildExpr(p.keyframes, (k) => k.x, "on")})-${bx}`);
+    const zy = escapeExpr(`(${buildExpr(p.keyframes, (k) => k.y, "on")})-${by}`);
+    return (
+      `crop=${bw}:${bh}:${bx}:${by},` +
+      `zoompan=z=${z}:x=${zx}:y=${zy}:d=1:s=${ow}x${oh}:fps=${num(p.output.fps)}`
     );
   };
 
@@ -493,7 +612,9 @@ export function buildFfmpeg(p: TimelapseProject, opts: BuildOptions = {}): Built
     if (speedup) parts.push(lightenSpeedupFilter(speedup));
     if (denoise && trail) parts.push(denoise); // before lagfun
     if (trail) parts.push(`lagfun=decay=${decay}`);
-    parts.push(windowCropScale(speedup ? `${speedup}*n` : "n"));
+    parts.push(
+      zoom ? zoomCropScale() : windowCropScale(speedup ? `${speedup}*n` : "n"),
+    );
     if (denoise && !trail) parts.push(denoise); // after scale (cheaper)
     filtergraph = parts.join(",");
     // setpts retimes the decimated frames; -r locks the output to a constant rate
@@ -519,6 +640,32 @@ export function buildFfmpeg(p: TimelapseProject, opts: BuildOptions = {}): Built
         ? filtergraph.replace(/\[outv\]$/, `${tail}[outv]`)
         : filtergraph + tail;
     graphArgs[1] = filtergraph;
+  }
+
+  // Speed ramp is the very last stage: it retimes the FINISHED stream (whatever
+  // frame count the pipeline produced), so it never touches the source indexing
+  // the pan/trails/stacking rely on. Keyframes are in source-frame space; map
+  // them onto the finished stream (identity unless a frame-count effect changed
+  // the length), then append the setpts+fps retime and update the frame count.
+  const ramp = p.post.speedRamp;
+  if (ramp && ramp.keyframes.length >= 2) {
+    const streamScale = N > 1 ? (outputFrames - 1) / (N - 1) : 1;
+    const streamKfs = ramp.keyframes.map((kf) => ({
+      ...kf,
+      frame: kf.frame * streamScale,
+    }));
+    const { chain, outputFrames: ramped } = speedRampChain(
+      streamKfs,
+      outputFrames,
+      p.output.fps,
+    );
+    filtergraph =
+      graphArgs[0] === "-filter_complex"
+        ? filtergraph.replace(/\[outv\]$/, `,${chain}[outv]`)
+        : filtergraph + `,${chain}`;
+    graphArgs[1] = filtergraph;
+    if (!graphArgs.includes("-r")) graphArgs.push("-r", String(p.output.fps));
+    outputFrames = ramped;
   }
 
   const args = [

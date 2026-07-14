@@ -132,6 +132,34 @@ export interface FadeSettings {
   outSec: number;
 }
 
+/**
+ * A speed-ramp keyframe: at source frame `frame`, playback runs at `speed`×
+ * (1 = normal, 2 = twice as fast, …). Between keyframes the speed eases from the
+ * previous value to this one. `easing` is how it eases INTO this keyframe.
+ */
+export interface SpeedKeyframe {
+  frame: number;
+  speed: number;
+  easing: "linear" | "easeInOut";
+  /**
+   * For "easeInOut", how far to blend toward the smoothstep curve: 0 = linear,
+   * 1 = full smoothstep (default). Lets the ramp's easing be dialed continuously.
+   */
+  easeAmount?: number;
+}
+
+/**
+ * Speed ramping: warp the playback speed over the clip. Applied as the LAST step
+ * of the pipeline (a retime of the finished frame stream), so it doesn't entangle
+ * with the source-frame indexing of the pan / trails / stacking — it just plays
+ * the completed shot faster or slower over time. Speeds ≥ 1 only drop frames
+ * (cheap); < 1 would need frame duplication.
+ */
+export interface SpeedRampSettings {
+  /** At least two keyframes (start + end); speeds interpolate between them. */
+  keyframes: SpeedKeyframe[];
+}
+
 export interface ColorSettings {
   /** eq brightness/exposure offset, -1..1ish (0 = neutral). */
   exposure?: number;
@@ -162,6 +190,8 @@ export interface PostSettings {
   /** Lighten-blend groups of frames and shorten the clip (pre-crop). */
   lightenSpeedup?: LightenSpeedupSettings;
   starTrail?: StarTrailSettings;
+  /** Time-warp the finished clip's playback speed (end of pipeline). */
+  speedRamp?: SpeedRampSettings;
   fade?: FadeSettings;
   color?: ColorSettings;
   /** Smooth gradient banding (post-grade, pre-fade). */

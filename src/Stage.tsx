@@ -30,7 +30,11 @@ interface Props {
   };
   /** Called while dragging a crop box; gives the new top-left in source px. */
   onDragWindow: (which: "start" | "end", x: number, y: number) => void;
+  /** Called while dragging a corner handle; gives the new window width in source px. */
+  onResizeWindow: (which: "start" | "end", widthSrc: number) => void;
 }
+
+const CORNER = 8; // corner handle size in buffer px
 
 function drawBox(
   ctx: CanvasRenderingContext2D,
@@ -45,6 +49,13 @@ function drawBox(
   if (dashed) ctx.setLineDash([6, 4]);
   ctx.strokeRect(r.x, r.y, r.w, r.h);
   ctx.setLineDash([]);
+  // corner resize handles (filled squares centered on each corner)
+  ctx.fillStyle = color;
+  for (const [hx, hy] of [
+    [r.x, r.y], [r.x + r.w, r.y], [r.x, r.y + r.h], [r.x + r.w, r.y + r.h],
+  ]) {
+    ctx.fillRect(hx - CORNER / 2, hy - CORNER / 2, CORNER, CORNER);
+  }
   ctx.font = "600 12px system-ui, sans-serif";
   const tw = ctx.measureText(label).width;
   const ly = Math.max(0, r.y - 17);
@@ -60,7 +71,7 @@ function drawBox(
  * (draggable), plus a dimmed "current view" that interpolates with the playhead.
  */
 export default function Stage({
-  ffmpegPath, ready, sourceDir, frameCount, srcW, srcH, startWin, endWin, playhead, grade, onDragWindow,
+  ffmpegPath, ready, sourceDir, frameCount, srcW, srcH, startWin, endWin, playhead, grade, onDragWindow, onResizeWindow,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const cache = useRef(new Map<string, HTMLImageElement>());
@@ -191,8 +202,13 @@ export default function Stage({
   }, [img, cur, startWin, endWin, scale, disabled, bufW, bufH,
       exposure, brightness, contrast, highlights, shadows, warmth, tint, vibrance, saturation]);
 
-  // dragging
-  const drag = useRef<{ which: "start" | "end"; offX: number; offY: number } | null>(null);
+  // dragging (move a box) or resizing (drag a corner handle)
+  const drag = useRef<
+    | { mode: "move"; which: "start" | "end"; offX: number; offY: number }
+    | { mode: "resize"; which: "start" | "end" }
+    | null
+  >(null);
+  const [overCorner, setOverCorner] = useState(false);
   function toSource(e: React.PointerEvent): { sx: number; sy: number } {
     const c = canvasRef.current!;
     const rect = c.getBoundingClientRect();
@@ -201,9 +217,31 @@ export default function Stage({
       sy: ((e.clientY - rect.top) / rect.height) * srcH,
     };
   }
+  // Corner hit-test threshold in source px (matches the on-screen handle size).
+  const cornerThr = () => (srcW && bufW ? (CORNER * srcW) / bufW : 0);
+  function nearestCorner(sx: number, sy: number): "start" | "end" | null {
+    const thr = cornerThr();
+    let best: { which: "start" | "end"; d: number } | null = null;
+    for (const [which, r] of [["start", startWin], ["end", endWin]] as const) {
+      for (const [hx, hy] of [
+        [r.x, r.y], [r.x + r.w, r.y], [r.x, r.y + r.h], [r.x + r.w, r.y + r.h],
+      ]) {
+        const d = Math.hypot(sx - hx, sy - hy);
+        if (d <= thr && (!best || d < best.d)) best = { which, d };
+      }
+    }
+    return best?.which ?? null;
+  }
   function onDown(e: React.PointerEvent) {
     if (disabled) return;
     const { sx, sy } = toSource(e);
+    // Corner handle → resize that box (takes priority over a move).
+    const corner = nearestCorner(sx, sy);
+    if (corner) {
+      drag.current = { mode: "resize", which: corner };
+      canvasRef.current!.setPointerCapture(e.pointerId);
+      return;
+    }
     const inside = (r: Rect) => sx >= r.x && sx <= r.x + r.w && sy >= r.y && sy <= r.y + r.h;
     const inA = inside(startWin);
     const inB = inside(endWin);
@@ -216,13 +254,24 @@ export default function Stage({
     else if (inA) which = "start";
     if (!which) return;
     const r = which === "start" ? startWin : endWin;
-    drag.current = { which, offX: sx - r.x, offY: sy - r.y };
+    drag.current = { mode: "move", which, offX: sx - r.x, offY: sy - r.y };
     canvasRef.current!.setPointerCapture(e.pointerId);
   }
   function onMove(e: React.PointerEvent) {
-    if (!drag.current) return;
     const { sx, sy } = toSource(e);
-    onDragWindow(drag.current.which, sx - drag.current.offX, sy - drag.current.offY);
+    if (!drag.current) {
+      if (!disabled) setOverCorner(nearestCorner(sx, sy) !== null);
+      return;
+    }
+    if (drag.current.mode === "resize") {
+      const r = drag.current.which === "start" ? startWin : endWin;
+      const cx = r.x + r.w / 2;
+      // Resize symmetrically around the center; aspect stays locked in App.
+      const newW = Math.max(2, 2 * Math.abs(sx - cx));
+      onResizeWindow(drag.current.which, newW);
+    } else {
+      onDragWindow(drag.current.which, sx - drag.current.offX, sy - drag.current.offY);
+    }
   }
   function onUp(e: React.PointerEvent) {
     drag.current = null;
@@ -244,7 +293,7 @@ export default function Stage({
         onPointerMove={onMove}
         onPointerUp={onUp}
         onPointerCancel={onUp}
-        style={{ cursor: disabled ? "default" : "grab" }}
+        style={{ cursor: disabled ? "default" : overCorner ? "nwse-resize" : "grab" }}
       />
       {disabled && <div className="previewHint">load a source folder to start</div>}
       {loading && !disabled && <div className="previewHint stageLoading">rendering frame…</div>}
